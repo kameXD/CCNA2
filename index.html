@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101219">
+  <title>SmartCapture</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="top"><div class="brand"><span class="mark" aria-hidden="true">⌗</span> Smart<span>Capture</span></div><div class="local"><i></i> Procesamiento local</div></header>
+  <main>
+    <section class="intro"><h1>Captura de pantalla</h1><p>Guarda automáticamente el contenido estable de tus lecciones.</p></section>
+    <div class="workspace">
+      <section class="panel source" aria-labelledby="source-title">
+        <div class="panel-head"><h2 id="source-title">Vista previa</h2><span id="status" class="status" role="status">Sin fuente</span></div>
+        <div id="stage" class="stage">
+          <div id="placeholder"><span class="screen-icon" aria-hidden="true"></span><strong>Comparte una fuente para empezar</strong><small>Elige una pestaña, ventana o pantalla</small></div>
+          <div id="surface" hidden><video id="video" muted playsinline></video><div id="selection" hidden></div></div>
+        </div>
+        <div class="controls">
+          <button id="share" class="primary">Compartir fuente</button>
+          <button id="region" disabled>Seleccionar región</button>
+          <button id="reset" disabled>Imagen completa</button>
+        </div>
+      </section>
+      <section class="panel settings" aria-labelledby="settings-title">
+        <div class="panel-head"><h2 id="settings-title">Detección automática</h2></div>
+        <div class="settings-content">
+          <div class="setting"><label for="sensitivity">Sensibilidad</label><output id="sensitivity-value" for="sensitivity">Alta</output></div>
+          <input id="sensitivity" type="range" min="1" max="5" value="4">
+          <p class="hint">Auméntala para detectar cambios más pequeños.</p>
+          <div class="setting"><label for="delay">Tiempo de espera</label><div class="unit"><input id="delay" type="number" min="0.25" max="30" step="0.25" value="1"> s</div></div>
+          <p class="hint">Tiempo que el contenido debe permanecer estable.</p>
+          <div class="session-actions"><button id="toggle" class="primary" disabled>Iniciar captura</button><button id="manual" disabled>Captura manual</button><button id="finish" class="quiet" disabled>Finalizar y dejar de compartir</button></div>
+        </div>
+      </section>
+    </div>
+    <p id="notice" role="status" aria-live="polite"></p>
+    <section class="panel gallery" aria-labelledby="gallery-title">
+      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button></div></div>
+      <div id="empty" class="empty">Las capturas aparecerán aquí.</div>
+      <ol id="gallery"></ol>
+    </section>
+  </main>
+  <dialog id="viewer" aria-labelledby="viewer-title">
+    <div class="viewer-head">
+      <h2 id="viewer-title">Captura</h2>
+      <div class="controls">
+        <button id="zoom" type="button" aria-pressed="false">Tamaño original</button>
+        <form method="dialog"><button aria-label="Cerrar imagen">Cerrar</button></form>
+      </div>
+    </div>
+    <div class="image-scroll"><img id="large" alt=""></div>
+  </dialog>
+</body>
+</html>
