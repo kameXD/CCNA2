@@ -1,4 +1,5 @@
-import { stabilityDetector } from './detection.js';
+import { changed, sensitivityLevels, stabilityDetector, visualSummary } from './detection.js';
+import { startSampling } from './sampling.js';
 import { openGallery, read, updateGallery } from './storage.js';
 import { makePdf, makeZip } from './exports.js';
 
@@ -7,7 +8,7 @@ const { video, stage, surface, selection, gallery, viewer, large } = elements;
 const canvas = document.createElement('canvas');
 const context = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
 const detector = stabilityDetector();
-const thresholds = [64, 32, 16, 7, 0];
+const duplicateSensitivity = [2, 2, 10];
 const sampleMs = 250;
 let db, stream, region, dragStart, draftRegion, dragId, viewerUrl;
 let entries = [];
@@ -17,7 +18,7 @@ let picking = false;
 let busy = false;
 let exporting = false;
 let generation = 0;
-let timer;
+let stopSampling;
 
 function notice(message) {
   elements.notice.textContent = message;
@@ -54,9 +55,12 @@ function resetDetection() {
 
 function setMode(next) {
   mode = next;
-  clearTimeout(timer);
+  stopSampling?.();
+  stopSampling = undefined;
   resetDetection();
-  if (mode === 'running' && !picking) timer = setTimeout(tick, 0);
+  if (mode === 'running' && !picking && stream) {
+    stopSampling = startSampling(stream.getVideoTracks()[0], sampleMs, tick);
+  }
   refreshControls();
 }
 
@@ -148,7 +152,7 @@ elements.share.onclick = async () => {
   refreshControls();
   try {
     const incoming = await navigator.mediaDevices.getDisplayMedia({
-      video: { width: { ideal: 7680 }, height: { ideal: 4320 }, frameRate: { ideal: 15 } },
+      video: { width: { ideal: 7680 }, height: { ideal: 4320 }, frameRate: { ideal: 15 }, cursor: 'never' },
       audio: false
     });
     stream = incoming;
@@ -214,11 +218,12 @@ elements.delay.onchange = () => {
   resetDetection();
 };
 
-function frame() {
+function frame(raw) {
   const track = stream?.getVideoTracks()[0];
-  const width = video.videoWidth;
-  const height = video.videoHeight;
-  if (!track || track.muted || track.readyState !== 'live' || video.readyState < 2 || !width || !height) return;
+  const width = raw?.displayWidth ?? video.videoWidth;
+  const height = raw?.displayHeight ?? video.videoHeight;
+  if (!track || track.muted || track.readyState !== 'live' ||
+      (!raw && video.readyState < 2) || !width || !height) return;
   const box = region ?? { x: 0, y: 0, w: 1, h: 1 };
   const x = Math.min(width - 1, Math.floor(box.x * width));
   const y = Math.min(height - 1, Math.floor(box.y * height));
@@ -229,26 +234,21 @@ function frame() {
     canvas.height = h;
     detector.reset();
   }
-  context.drawImage(video, x, y, w, h, 0, 0, w, h);
+  context.drawImage(raw ?? video, x, y, w, h, 0, 0, w, h);
   return context.getImageData(0, 0, w, h);
 }
 
-async function tick() {
-  timer = undefined;
+async function tick(raw) {
+  if (busy) return;
   try {
-    if (!busy) {
-      const pixels = frame();
-      if (pixels && detector.observe(pixels.data, performance.now(), thresholds[elements.sensitivity.value - 1], delay() * 1000)) {
-        await save(pixels, generation);
-      } else if (!pixels) detector.reset();
-    }
+    const pixels = frame(raw);
+    const sensitivity = sensitivityLevels[elements.sensitivity.value - 1];
+    if (pixels && detector.observe(pixels, performance.now(), sensitivity, delay() * 1000)) {
+      await save(pixels, generation);
+    } else if (!pixels) detector.reset();
   } catch (error) {
     if (mode === 'running') setMode('paused');
     report(error);
-  } finally {
-    if (mode === 'running' && !picking && timer === undefined) {
-      timer = setTimeout(tick, sampleMs);
-    }
   }
 }
 
@@ -257,6 +257,30 @@ function encode(target, type, quality) {
     if (blob) resolve(blob);
     else reject(new Error('No se pudo codificar la captura.'));
   }, type, quality));
+}
+
+async function findVisualDuplicate(pixels, summary, token) {
+  const { width, height } = pixels;
+  const galleryOrder = await read(db, 'gallery', 'order') ?? [];
+  let ctx;
+  for (let index = galleryOrder.length - 1; index >= 0; index--) {
+    const entry = galleryOrder[index];
+    if (token !== generation) break;
+    if (entry.width !== width || entry.height !== height ||
+        entry.summary?.some((value, index) => Math.abs(value - summary[index]) > 12)) continue;
+    const image = await read(db, 'images', entry.id);
+    if (!image) continue;
+    if (!ctx) {
+      const comparison = document.createElement('canvas');
+      comparison.width = width;
+      comparison.height = height;
+      ctx = comparison.getContext('2d', { alpha: false, willReadFrequently: true });
+    }
+    const bitmap = await createImageBitmap(image.png);
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    if (!changed(pixels, ctx.getImageData(0, 0, width, height), duplicateSensitivity)) return entry.id;
+  }
 }
 
 async function save(pixels, token, manual = false) {
@@ -268,7 +292,16 @@ async function save(pixels, token, manual = false) {
     const digest = await crypto.subtle.digest('SHA-256', data);
     const hash = `${width}x${height}:${Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')}`;
     if (!manual && token !== generation) return;
+    const summary = visualSummary(pixels);
+    const visualMatch = !manual && !entries.some(entry => entry.hash === hash)
+      ? await findVisualDuplicate(pixels, summary, token) : undefined;
+    if (!manual && token !== generation) return;
     let duplicate = entries.some(entry => entry.hash === hash);
+    if (visualMatch) {
+      const current = await read(db, 'gallery', 'order') ?? [];
+      duplicate ||= current.some(entry => entry.id === visualMatch);
+    }
+    if (!manual && token !== generation) return;
     if (!duplicate) {
       const thumb = document.createElement('canvas');
       const scale = Math.min(1, 320 / width, 200 / height);
@@ -277,7 +310,7 @@ async function save(pixels, token, manual = false) {
       thumb.getContext('2d', { alpha: false }).drawImage(canvas, 0, 0, thumb.width, thumb.height);
       const [png, preview] = await Promise.all([encode(canvas, 'image/png'), encode(thumb, 'image/jpeg', 0.8)]);
       if (!manual && token !== generation) return;
-      const entry = { id: crypto.randomUUID(), time, width, height, hash };
+      const entry = { id: crypto.randomUUID(), time, width, height, hash, summary };
       entries = await updateGallery(db, list => {
         duplicate = list.some(item => item.hash === hash);
         return duplicate ? list : [...list, entry];
@@ -285,7 +318,7 @@ async function save(pixels, token, manual = false) {
       render();
     }
     if (token === generation) {
-      if (!manual) detector.accept(data);
+      if (!manual) detector.accept(pixels);
       else detector.reset();
     }
     if (!duplicate) notice(manual ? 'Captura manual guardada.' : 'Captura automática guardada.');

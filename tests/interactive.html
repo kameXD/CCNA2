@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fuente SmartCapture</title>
+<style>
+  body{background:#293039;color:#eaeff8;font:16px system-ui;margin:24px}
+  button{margin-right:8px}
+  #diagram{width:160px;height:58px;display:grid;place-items:center;border:1px solid #91a0be;margin-top:16px}
+  .pointer{position:fixed;left:0;top:0;width:22px;height:29px;background:white;clip-path:polygon(0 0,100% 66%,57% 66%,79% 94%,58% 100%,37% 74%,0 93%)}
+  .pointer::before{content:"";position:absolute;inset:2px;background:black;clip-path:inherit}
+  #notes{color:#2e353e;font:700 18px monospace}
+</style>
+<h1>Práctica de redes</h1>
+<div role="tablist" aria-label="Vista">
+  <button role="tab" id="topology" aria-selected="true">Topología</button>
+  <button role="tab" id="config" aria-selected="false">Configuración</button>
+</div>
+<section role="tabpanel">
+  <div id="diagram">R1 → R2</div>
+  <p id="notes">Puerto: 1</p>
+  <button id="details">Cambiar comando</button>
+</section>
+<div class="pointer" hidden></div>
+<script>
+  const tabs = [...document.querySelectorAll('[role=tab]')];
+  for (const tab of tabs) tab.onclick = () => {
+    for (const item of tabs) item.setAttribute('aria-selected', String(item === tab));
+    document.querySelector('#diagram').textContent = tab.id === 'config' ? 'R1 ← R2' : 'R1 → R2';
+    document.querySelector('#notes').textContent = 'Puerto: 1';
+  };
+  document.querySelector('#details').onclick = () => {
+    const notes = document.querySelector('#notes');
+    notes.textContent = notes.textContent.endsWith('1') ? 'Puerto: 2' : 'Puerto: 1';
+  };
+  window.movePointer = (x, y) => {
+    const pointer = document.querySelector('.pointer');
+    pointer.hidden = false;
+    pointer.style.transform = `translate(${x}px,${y}px)`;
+  };
+  movePointer(320, 220);
+</script>
