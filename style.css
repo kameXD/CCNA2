@@ -61,7 +61,11 @@ dialog{max-width:min(96vw,1450px);max-height:94vh;background:var(--panel);border
 dialog::backdrop{background:#080a10d9}
 .viewer-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
 .viewer-head .controls{padding:0}
-.image-scroll{max-height:72vh;overflow:auto}
+.crop-option{display:flex;align-items:center;gap:7px;margin:0 0 15px;font-size:13px}
+.crop-option input{accent-color:var(--accent)}
+.viewer-body{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:center}
+.viewer-body>button{padding:4px 10px;font-size:24px;line-height:1.2}
+.image-scroll{min-width:0;max-height:72vh;overflow:auto}
 #large{display:block;max-width:100%;max-height:72vh;object-fit:contain}
 #viewer.original #large{max-width:none;max-height:none}
 @media(max-width:760px){.workspace{grid-template-columns:1fr}.stage{height:clamp(240px,65vw,400px)}}

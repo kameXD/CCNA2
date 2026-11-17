@@ -1,6 +1,7 @@
 const tileSize = 16;
 const pointerSize = 64;
 const pointerBudget = pointerSize * pointerSize;
+const decorationBudget = 12000;
 
 // [RGB noise floor, minimum regional pixels, minimum regional contrast].
 export const sensitivityLevels = [
@@ -128,6 +129,96 @@ function pointerMoved(points, width, before, after) {
   return overlappingPointer(points, width, before, after);
 }
 
+function scrollbarMoved(area, width, height, before, after) {
+  if (area.width > 18 || area.height < 20 ||
+      (area.left >= 18 && area.left + area.width <= width - 18)) return false;
+  // A track must have the same background at both ends, and exactly one
+  // contiguous thumb of the same color and length in each image.
+  function thumb(pixels, x, track) {
+    let start = -1, end = -1, color;
+    if (contrast(pixels[(height - 1) * width + x], track) > 3) return;
+    for (let y = 1; y < height - 1; y++) {
+      const pixel = pixels[y * width + x];
+      if (contrast(pixel, track) <= 3) continue;
+      if (start < 0) {
+        start = y;
+        color = pixel;
+      } else if (y !== end + 1 || contrast(pixel, color) > 4) return;
+      end = y;
+    }
+    if (end - start >= 11 && contrast(color, track) >= 8) return { start, end, color };
+  }
+  let shift;
+  for (let x = area.left; x < area.left + area.width; x++) {
+    const track = before[x];
+    if (contrast(track, after[x]) > 3) return false;
+    const old = thumb(before, x, track);
+    const next = thumb(after, x, track);
+    if (!old || !next || contrast(old.color, next.color) > 3 ||
+        Math.abs((old.end - old.start) - (next.end - next.start)) > 1) return false;
+    const offset = next.start - old.start;
+    if (!offset || (shift !== undefined && Math.abs(shift - offset) > 1)) return false;
+    shift = offset;
+  }
+  return true;
+}
+
+function flatHover(points, area, width, before, after) {
+  if (area.width < 24 || area.width > 180 || area.height < 14 || area.height > 56 ||
+      points.length < area.width * area.height * 0.50) return false;
+  const colors = new Map();
+  let base, fill, most = 0;
+  for (const point of points) {
+    const key = (before[point] & 0xffffff) * 0x1000000 + (after[point] & 0xffffff);
+    const frequency = (colors.get(key) ?? 0) + 1;
+    colors.set(key, frequency);
+    if (frequency > most) {
+      most = frequency;
+      base = before[point];
+      fill = after[point];
+    }
+  }
+  const channels = [0, 8, 16];
+  const deltas = channels.map(shift => ((fill >>> shift) & 255) - ((base >>> shift) & 255));
+  const prominent = deltas.reduce((a, b) => Math.abs(a) > Math.abs(b) ? a : b);
+  if (Math.abs(prominent) < 5 || Math.abs(prominent) > 30 ||
+      Math.max(...deltas) - Math.min(...deltas) > 5) return false;
+
+  let filled = 0;
+  for (const point of points) {
+    if (contrast(before[point], base) <= 3 && contrast(after[point], fill) <= 3) {
+      filled++;
+      continue;
+    }
+    const x = point % width, y = Math.floor(point / width);
+    if (x >= area.left + 4 && x < area.left + area.width - 4 &&
+        y >= area.top + 4 && y < area.top + area.height - 4) {
+      const oldDetail = contrast(before[point], base);
+      const newDetail = contrast(after[point], fill);
+      if (Math.min(oldDetail, newDetail) <= 6 && Math.max(oldDetail, newDetail) >= 18) return false;
+    }
+    // Unchanged antialiased glyphs can inherit a fraction of the fill delta.
+    const actual = channels.map(shift => ((after[point] >>> shift) & 255) - ((before[point] >>> shift) & 255));
+    const fraction = Math.max(0, Math.min(1, (actual[0] + actual[1] + actual[2]) / (deltas[0] + deltas[1] + deltas[2])));
+    if (!actual.every((value, index) => Math.abs(value - deltas[index] * fraction) <= 4)) return false;
+  }
+  if (filled < points.length * 0.75) return false;
+  let foreground = 0;
+  for (let y = area.top + 4; y < area.top + area.height - 4; y++) {
+    for (let x = area.left + 4; x < area.left + area.width - 4; x++) {
+      const i = y * width + x;
+      if (contrast(before[i], after[i]) <= 2 && contrast(before[i], base) >= 45) foreground++;
+    }
+  }
+  return foreground >= 8;
+}
+
+function decorative(points, width, height, before, after) {
+  if (points.length <= pointerBudget && pointerMoved(points, width, before, after)) return true;
+  const area = bounds(points, width);
+  return scrollbarMoved(area, width, height, before, after) || flatHover(points, area, width, before, after);
+}
+
 export function changed(current, previous, [floor, minPixels, minContrast]) {
   if (!previous || current.width !== previous.width || current.height !== previous.height) return true;
   const { width, height } = current;
@@ -151,8 +242,8 @@ export function changed(current, previous, [floor, minPixels, minContrast]) {
       energy[tile] += delta;
       total++;
       totalEnergy += delta;
-      if (points.length < pointerBudget) points.push(i);
-      if (total > pointerBudget && total >= globalMinimum && totalEnergy >= minContrast * 4) return true;
+      if (points.length < decorationBudget) points.push(i);
+      if (total > decorationBudget && total >= globalMinimum && totalEnergy >= minContrast * 4) return true;
     }
   }
   if (total < minPixels || totalEnergy < minContrast) return false;
@@ -183,7 +274,7 @@ export function changed(current, previous, [floor, minPixels, minContrast]) {
     }
   }
   return (global || regional) &&
-    (total > pointerBudget || !pointerMoved(points, width, before, after));
+    (total > decorationBudget || !decorative(points, width, height, before, after));
 }
 
 // A negative filter only. Original-size pixels decide whether a candidate is a duplicate.
@@ -213,14 +304,15 @@ export function visualSummary({ data, width, height }) {
 }
 
 export function stabilityDetector() {
-  let anchor, accepted, since, fresh;
+  let anchor, accepted, since, fresh, moving;
   return {
     reset() {
       anchor = accepted = undefined;
-      fresh = false;
+      fresh = moving = false;
     },
     observe(frame, now, sensitivity, delay) {
-      if (changed(frame, anchor, sensitivity)) {
+      moving = changed(frame, anchor, sensitivity);
+      if (moving) {
         anchor = frame;
         since = now;
         fresh = true;
@@ -232,6 +324,7 @@ export function stabilityDetector() {
       }
       return false;
     },
+    moved() { return moving; },
     accept(frame) { anchor = accepted = frame; }
   };
 }

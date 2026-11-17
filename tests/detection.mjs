@@ -63,3 +63,33 @@ test('el cursor no reinicia la espera de una vista estable', () => {
   detector.accept(next);
   assert.equal(detector.observe(initial, 2000, high, 1000), false);
 });
+
+test('un fondo hover conserva el texto y nunca oculta un glifo modificado', () => {
+  const original = frame(), hover = frame();
+  for (let y = 20; y < 46; y++) {
+    for (let x = 25; x < 115; x++) {
+      paint(original, x, y, [90, 95, 100]);
+      paint(hover, x, y, [105, 110, 115]);
+      if (x % 7 < 2 && y > 27 && y < 38) {
+        paint(original, x, y, [230, 230, 235]);
+        paint(hover, x, y, [230, 230, 235]);
+      }
+    }
+  }
+  assert.equal(changed(hover, original, high), false);
+  for (let x = 50; x < 57; x++) paint(hover, x, 35, [130, 135, 140]);
+  assert.equal(changed(hover, original, high), true);
+});
+
+test('solo se omite una barra de desplazamiento reconocible en el borde', () => {
+  const old = frame(), next = frame();
+  for (let x = 136; x < 144; x++) {
+    for (let y = 0; y < 26; y++) {
+      paint(old, x, y + 6, [125, 125, 125]);
+      paint(next, x, y + 50, [125, 125, 125]);
+    }
+  }
+  assert.equal(changed(next, old, high), false);
+  for (let y = 36; y < 43; y++) paint(next, 140, y, [115, 120, 130]);
+  assert.equal(changed(next, old, high), true);
+});

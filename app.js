@@ -1,4 +1,5 @@
 import { changed, sensitivityLevels, stabilityDetector, visualSummary } from './detection.js';
+import { scrollCoverage, sideMargins } from './capture-analysis.js';
 import { startSampling } from './sampling.js';
 import { openGallery, read, updateGallery } from './storage.js';
 import { makePdf, makeZip } from './exports.js';
@@ -8,7 +9,8 @@ const { video, stage, surface, selection, gallery, viewer, large } = elements;
 const canvas = document.createElement('canvas');
 const context = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
 const detector = stabilityDetector();
-const duplicateSensitivity = [2, 2, 10];
+const coverage = scrollCoverage();
+const duplicateSensitivity = [1, 2, 8];
 const sampleMs = 250;
 let db, stream, region, dragStart, draftRegion, dragId, viewerUrl;
 let entries = [];
@@ -17,6 +19,10 @@ let sharing = false;
 let picking = false;
 let busy = false;
 let exporting = false;
+let clearing = false;
+let clearVersion = 0;
+let viewerId;
+let viewerRequest = 0;
 let generation = 0;
 let stopSampling;
 
@@ -35,8 +41,8 @@ function refreshControls() {
   elements.share.disabled = active || sharing || !navigator.mediaDevices?.getDisplayMedia;
   elements.region.disabled = !active;
   elements.reset.disabled = !active || (!region && !picking);
-  elements.toggle.disabled = !active || !db || picking;
-  elements.manual.disabled = !active || !db || picking || busy;
+  elements.toggle.disabled = !active || !db || picking || clearing;
+  elements.manual.disabled = !active || !db || picking || busy || clearing;
   elements.finish.disabled = !active;
   elements.toggle.textContent = {
     idle: 'Iniciar captura', running: 'Pausar captura', paused: 'Reanudar captura'
@@ -45,12 +51,13 @@ function refreshControls() {
   elements.status.textContent = active ? {
     idle: 'Fuente compartida', running: 'Captura activa', paused: 'Captura pausada'
   }[mode] : 'Sin fuente';
-  elements.pdf.disabled = elements.zip.disabled = !entries.length || exporting;
+  elements.pdf.disabled = elements.zip.disabled = elements.clear.disabled = !entries.length || exporting || clearing;
 }
 
 function resetDetection() {
   generation++;
   detector.reset();
+  coverage.reset();
 }
 
 function setMode(next) {
@@ -233,19 +240,26 @@ function frame(raw) {
     canvas.width = w;
     canvas.height = h;
     detector.reset();
+    coverage.reset();
   }
   context.drawImage(raw ?? video, x, y, w, h, 0, 0, w, h);
   return context.getImageData(0, 0, w, h);
 }
 
 async function tick(raw) {
-  if (busy) return;
+  if (busy || clearing) return;
   try {
     const pixels = frame(raw);
     const sensitivity = sensitivityLevels[elements.sensitivity.value - 1];
-    if (pixels && detector.observe(pixels, performance.now(), sensitivity, delay() * 1000)) {
-      await save(pixels, generation);
-    } else if (!pixels) detector.reset();
+    if (!pixels) {
+      detector.reset();
+      coverage.reset();
+      return;
+    }
+    const stable = detector.observe(pixels, performance.now(), sensitivity, delay() * 1000);
+    const checkpoint = detector.moved() ? coverage.observe(pixels) : undefined;
+    if (checkpoint) await save(checkpoint, generation, false, checkpoint !== pixels);
+    else if (stable && !coverage.redundant(pixels)) await save(pixels, generation);
   } catch (error) {
     if (mode === 'running') setMode('paused');
     report(error);
@@ -259,15 +273,15 @@ function encode(target, type, quality) {
   }, type, quality));
 }
 
-async function findVisualDuplicate(pixels, summary, token) {
+async function findVisualDuplicate(pixels, summary, token, galleryOrder) {
   const { width, height } = pixels;
-  const galleryOrder = await read(db, 'gallery', 'order') ?? [];
+  let examined = 0;
   let ctx;
-  for (let index = galleryOrder.length - 1; index >= 0; index--) {
-    const entry = galleryOrder[index];
+  for (const entry of galleryOrder.sort((a, b) => b.time - a.time)) {
     if (token !== generation) break;
     if (entry.width !== width || entry.height !== height ||
         entry.summary?.some((value, index) => Math.abs(value - summary[index]) > 12)) continue;
+    if (++examined > 16) break;
     const image = await read(db, 'images', entry.id);
     if (!image) continue;
     if (!ctx) {
@@ -283,33 +297,53 @@ async function findVisualDuplicate(pixels, summary, token) {
   }
 }
 
-async function save(pixels, token, manual = false) {
+async function save(pixels, token, manual = false, retained = false) {
   const time = Date.now();
+  const version = clearVersion;
+  const cancelled = () => version !== clearVersion || (!manual && token !== generation);
   busy = true;
   refreshControls();
   try {
-    const { width, height, data } = pixels;
+    const { left, right } = elements['auto-crop'].checked ? sideMargins(pixels) : { left: 0, right: 0 };
+    const cropped = left || right;
+    const width = pixels.width - left - right;
+    const { height } = pixels;
+    // A retained scroll checkpoint may differ from the sample currently on the canvas.
+    if (retained) context.putImageData(pixels, 0, 0);
+    let output = canvas;
+    if (cropped) {
+      output = document.createElement('canvas');
+      output.width = width;
+      output.height = height;
+      output.getContext('2d', { alpha: false }).drawImage(canvas, left, 0, width, height, 0, 0, width, height);
+    }
+    const croppedPixels = cropped ? output.getContext('2d').getImageData(0, 0, width, height) : pixels;
+    const { data } = croppedPixels;
     const digest = await crypto.subtle.digest('SHA-256', data);
     const hash = `${width}x${height}:${Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')}`;
-    if (!manual && token !== generation) return;
-    const summary = visualSummary(pixels);
-    const visualMatch = !manual && !entries.some(entry => entry.hash === hash)
-      ? await findVisualDuplicate(pixels, summary, token) : undefined;
-    if (!manual && token !== generation) return;
-    let duplicate = entries.some(entry => entry.hash === hash);
-    if (visualMatch) {
-      const current = await read(db, 'gallery', 'order') ?? [];
-      duplicate ||= current.some(entry => entry.id === visualMatch);
+    if (cancelled()) return;
+    const current = await read(db, 'gallery', 'order') ?? [];
+    let duplicate = current.some(entry => entry.hash === hash);
+    let summary;
+    if (!duplicate) {
+      summary = visualSummary(croppedPixels);
+      if (!manual && current.length) {
+        const match = await findVisualDuplicate(croppedPixels, summary, token, current);
+        if (match) {
+          const updated = await read(db, 'gallery', 'order') ?? [];
+          duplicate = updated.some(entry => entry.id === match);
+        }
+      }
     }
-    if (!manual && token !== generation) return;
+    if (cancelled()) return;
     if (!duplicate) {
       const thumb = document.createElement('canvas');
       const scale = Math.min(1, 320 / width, 200 / height);
       thumb.width = Math.max(1, Math.round(width * scale));
       thumb.height = Math.max(1, Math.round(height * scale));
-      thumb.getContext('2d', { alpha: false }).drawImage(canvas, 0, 0, thumb.width, thumb.height);
-      const [png, preview] = await Promise.all([encode(canvas, 'image/png'), encode(thumb, 'image/jpeg', 0.8)]);
-      if (!manual && token !== generation) return;
+      thumb.getContext('2d', { alpha: false }).drawImage(output, 0, 0, thumb.width, thumb.height);
+      const [png, preview] = await Promise.all([encode(output, 'image/png'), encode(thumb, 'image/jpeg', 0.8)]);
+      if (cancelled()) return;
       const entry = { id: crypto.randomUUID(), time, width, height, hash, summary };
       entries = await updateGallery(db, list => {
         duplicate = list.some(item => item.hash === hash);
@@ -318,6 +352,7 @@ async function save(pixels, token, manual = false) {
       render();
     }
     if (token === generation) {
+      coverage.reset(pixels);
       if (!manual) detector.accept(pixels);
       else detector.reset();
     }
@@ -452,6 +487,7 @@ function render() {
   });
   elements.count.textContent = entries.length;
   elements.empty.hidden = entries.length > 0;
+  updateViewerPosition();
   refreshControls();
 }
 
@@ -471,12 +507,26 @@ function moveRelative(id, offset) {
 }
 
 async function edit(change, imageChange) {
-  if (exporting) return;
+  if (exporting || clearing) return;
   try {
     entries = await updateGallery(db, change, imageChange);
     render();
   } catch (error) { report(error); }
 }
+
+elements.clear.onclick = async () => {
+  if (!entries.length || exporting || clearing ||
+      !confirm('¿Eliminar todas las capturas de la galería? Esta acción no se puede deshacer.')) return;
+  clearing = true;
+  clearVersion++;
+  if (mode === 'running') setMode('paused');
+  refreshControls();
+  try {
+    entries = await updateGallery(db, () => [], store => store.clear());
+    notice('Se eliminaron todas las capturas.');
+  } catch (error) { report(error); }
+  finally { clearing = false; render(); }
+};
 
 async function loadPng(id) {
   const image = await read(db, 'images', id);
@@ -484,15 +534,43 @@ async function loadPng(id) {
   return image.png;
 }
 
+function updateViewerPosition() {
+  const index = entries.findIndex(entry => entry.id === viewerId);
+  elements['viewer-count'].value = index < 0 ? '' : `${index + 1} de ${entries.length}`;
+  elements['viewer-prev'].disabled = index <= 0;
+  elements['viewer-next'].disabled = index < 0 || index === entries.length - 1;
+  return index;
+}
+
 async function enlarge(entry) {
+  if (!viewer.open) viewer.showModal();
+  const request = ++viewerRequest;
+  viewerId = entry.id;
+  updateViewerPosition();
   const png = await loadPng(entry.id);
+  if (!viewer.open || request !== viewerRequest) return;
   if (viewerUrl) URL.revokeObjectURL(viewerUrl);
   viewerUrl = URL.createObjectURL(png);
   large.src = viewerUrl;
   large.alt = `Captura del ${dateFormat.format(entry.time)}`;
   elements['viewer-title'].textContent = `Captura · ${entry.width} × ${entry.height} px`;
-  if (!viewer.open) viewer.showModal();
+  large.parentElement.scrollTo(0, 0);
 }
+
+function navigateViewer(direction) {
+  const index = updateViewerPosition();
+  const entry = index < 0 ? undefined : entries[index + direction];
+  if (entry) enlarge(entry).catch(report);
+}
+
+elements['viewer-prev'].onclick = () => navigateViewer(-1);
+elements['viewer-next'].onclick = () => navigateViewer(1);
+viewer.addEventListener('keydown', event => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  navigateViewer(event.key === 'ArrowLeft' ? -1 : 1);
+});
 
 elements.zoom.onclick = () => {
   const original = viewer.classList.toggle('original');
@@ -501,6 +579,9 @@ elements.zoom.onclick = () => {
 };
 
 viewer.addEventListener('close', () => {
+  if (viewer.open) return;
+  viewerRequest++;
+  viewerId = undefined;
   if (viewer.classList.contains('original')) elements.zoom.click();
   large.removeAttribute('src');
   if (viewerUrl) URL.revokeObjectURL(viewerUrl);

@@ -33,13 +33,14 @@
           <p class="hint">Auméntala para detectar cambios más pequeños.</p>
           <div class="setting"><label for="delay">Tiempo de espera</label><div class="unit"><input id="delay" type="number" min="0.25" max="30" step="0.25" value="1"> s</div></div>
           <p class="hint">Tiempo que el contenido debe permanecer estable.</p>
+          <label class="crop-option"><input id="auto-crop" type="checkbox"> Recortar márgenes laterales vacíos</label>
           <div class="session-actions"><button id="toggle" class="primary" disabled>Iniciar captura</button><button id="manual" disabled>Captura manual</button><button id="finish" class="quiet" disabled>Finalizar y dejar de compartir</button></div>
         </div>
       </section>
     </div>
     <p id="notice" role="status" aria-live="polite"></p>
     <section class="panel gallery" aria-labelledby="gallery-title">
-      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button></div></div>
+      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button><button id="clear" class="quiet" disabled>Eliminar todas</button></div></div>
       <div id="empty" class="empty">Las capturas aparecerán aquí.</div>
       <ol id="gallery"></ol>
     </section>
@@ -47,12 +48,17 @@
   <dialog id="viewer" aria-labelledby="viewer-title">
     <div class="viewer-head">
       <h2 id="viewer-title">Captura</h2>
+      <output id="viewer-count" aria-live="polite"></output>
       <div class="controls">
         <button id="zoom" type="button" aria-pressed="false">Tamaño original</button>
         <form method="dialog"><button aria-label="Cerrar imagen">Cerrar</button></form>
       </div>
     </div>
-    <div class="image-scroll"><img id="large" alt=""></div>
+    <div class="viewer-body">
+      <button id="viewer-prev" type="button" aria-label="Captura anterior">‹</button>
+      <div class="image-scroll" tabindex="0"><img id="large" alt=""></div>
+      <button id="viewer-next" type="button" aria-label="Captura siguiente">›</button>
+    </div>
   </dialog>
 </body>
 </html>

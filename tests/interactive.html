@@ -8,6 +8,8 @@
   .pointer{position:fixed;left:0;top:0;width:22px;height:29px;background:white;clip-path:polygon(0 0,100% 66%,57% 66%,79% 94%,58% 100%,37% 74%,0 93%)}
   .pointer::before{content:"";position:absolute;inset:2px;background:black;clip-path:inherit}
   #notes{color:#2e353e;font:700 18px monospace}
+  #details{color:white;background:#535b65;border:0;width:150px;height:35px;font:700 14px monospace}
+  #details:hover,#details.hover{background:#656d77}
 </style>
 <h1>Práctica de redes</h1>
 <div role="tablist" aria-label="Vista">
@@ -37,4 +39,35 @@
     pointer.style.transform = `translate(${x}px,${y}px)`;
   };
   movePointer(320, 220);
+  window.prepareScroll = () => {
+    document.documentElement.style.background = '#eee';
+    document.body.style = 'margin:0 auto;background:#eee;width:420px';
+    const canvas = document.createElement('canvas');
+    canvas.width = 420;
+    canvas.height = 1400;
+    canvas.style.display = 'block';
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#eee';
+    context.fillRect(0, 0, 420, 1400);
+    for (let y = 0; y < 1400; y += 2) {
+      let state = Math.imul(y + 13, 982451653);
+      for (let x = 12; x < 410; x += 8) {
+        state ^= state << 13;
+        state ^= state >>> 17;
+        state ^= state << 5;
+        if (state & 1) {
+          context.fillStyle = (state & 2) ? '#222' : '#888';
+          context.fillRect(x, y, 6, 2);
+        }
+      }
+    }
+    for (let y = 50; y < 1350; y += 160) {
+      context.fillStyle = '#eee';
+      context.fillRect(24, y - 21, 290, 25);
+      context.fillStyle = '#111';
+      context.font = 'bold 18px sans-serif';
+      context.fillText('Bloque de estudio ' + (y - 50) / 160, 28, y);
+    }
+    document.body.replaceChildren(canvas);
+  };
 </script>
