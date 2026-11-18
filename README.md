@@ -24,9 +24,17 @@ En ese modo, mantén el botón izquierdo y arrastra sobre la galería para selec
 10. Para incorporar imágenes PNG, JPG/JPEG o WEBP, usa **Adjuntar imágenes**, pega con **Ctrl + V** o suelta los archivos en la galería. En **Insertar**, elige **Al final** o indica si deben ir antes o después de una imagen y escribe su número actual.
 11. Exporta el orden actual como **PDF** de una imagen por página o **ZIP** de archivos numerados en su formato original. El PDF conserva las dimensiones de píxeles y comprime el RGB sin pérdida. En PDF, las transparencias se muestran sobre blanco y los archivos animados se representan como una imagen estática. El ZIP conserva los bytes originales.
 
+## Panel flotante
+
+Pulsa **Abrir panel flotante** en los controles de la fuente. En navegadores compatibles, **Document Picture-in-Picture** abre una ventana móvil y redimensionable que se mantiene visible al cambiar de pestaña. Si la API está deshabilitada o no está disponible, SmartCapture abre una ventana emergente sin garantía de permanecer encima. Si el navegador la bloquea, permite las ventanas emergentes para SmartCapture y vuelve a pulsar el botón.
+
+El panel usa la misma sesión que la aplicación. Puedes pausar, reanudar, hacer capturas manuales y cambiar o crear álbumes mientras la captura automática está pausada. La vista previa muestra la última imagen guardada. Al navegar a otra imagen o pulsar **Ampliar**, se desactiva el seguimiento para permitir la revisión. Puedes reactivarlo, ocultar la vista previa o enviar una imagen a la papelera y deshacerlo. Cerrar el panel mantiene activa la sesión. Cerrar la pestaña principal cierra también el panel.
+
+Comparte la **pestaña de origen** para que el navegador capture solo su contenido. Si compartes toda la pantalla, el panel puede aparecer en la captura. El tamaño y la posición de la ventana dependen del navegador y de Windows.
+
 ## Publicación en GitHub Pages
 
-1. Sube `index.html`, `style.css`, `app.js`, `detection.js`, `capture-analysis.js`, `sampling.js`, `sample-clock.js`, `storage.js`, `trash.js`, `marquee.js` y `exports.js` a la raíz de `main`.
+1. Sube `index.html`, `style.css`, `app.js`, `detection.js`, `capture-analysis.js`, `sampling.js`, `sample-clock.js`, `storage.js`, `trash.js`, `marquee.js`, `exports.js`, `floating-panel.js` y `floating-panel.css` a la raíz de `main`.
 2. En GitHub, abre **Settings → Pages**. Elige **Deploy from a branch**, selecciona **main** y **/ (root)**, y guarda.
 3. Cuando termine el despliegue, abre la URL HTTPS indicada en **Pages**. Para este repositorio, la URL predeterminada es `https://kamexd.github.io/CCNA2/`. Prueba **Compartir fuente** desde esa página.
 
@@ -52,6 +60,8 @@ Para probar localmente con Node.js instalado, ejecuta `npx --yes http-server . -
 - La máxima resolución del PNG es la del flujo que Chrome o Brave entrega para la fuente y el recorte elegidos. El tamaño de la vista previa no altera esa resolución.
 
 ## Verificación
+
+Para el panel, ejecuta `node tests/interactive.mjs --floating` y `node tests/interactive.mjs --floating-popup`. En Brave para Windows 11, comprueba manualmente la disponibilidad de la API con tu configuración, que la ventana se mantenga encima al cambiar de pestaña, y que pueda moverse y redimensionarse. Prueba también el bloqueo de ventanas emergentes, la exclusión del panel al compartir una pestaña y el aviso al compartir el monitor completo.
 
 Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para comprobar la captura, la galería y la papelera. Añade `--albums` para verificar los álbumes y la migración de una base de datos anterior, `--selection` para probar las operaciones en lote o `--marquee` para probar la selección por arrastre. Usa `--preview` para tomar los fotogramas de la vista previa. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
 

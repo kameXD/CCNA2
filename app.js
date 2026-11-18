@@ -8,6 +8,7 @@ import {
 import { moveToTrash, restoreOrder } from './trash.js';
 import { makePdf, makeZip } from './exports.js';
 import { attachMarquee } from './marquee.js';
+import { createFloatingPanel } from './floating-panel.js';
 
 const elements = Object.fromEntries([...document.querySelectorAll('[id]')].map(el => [el.id, el]));
 const { video, stage, surface, selection, gallery, viewer, large } = elements;
@@ -48,6 +49,7 @@ let stopSampling;
 
 function notice(message) {
   elements.notice.textContent = message;
+  floatingPanel.update();
 }
 
 function report(error) {
@@ -93,6 +95,7 @@ function refreshControls() {
   position.hidden = !entries.length || elements['insert-mode'].value === 'end';
   position.disabled = position.hidden || locked;
   position.max = entries.length;
+  floatingPanel.update();
 }
 
 function resetDetection() {
@@ -814,6 +817,7 @@ function hideUndo() {
   clearTimeout(undoTimer);
   undoIds = [];
   elements['undo-toast'].hidden = true;
+  floatingPanel.update();
 }
 
 function showUndo(ids) {
@@ -825,6 +829,7 @@ function showUndo(ids) {
     ? 'Imagen enviada a la papelera.' : `${ids.length} imágenes enviadas a la papelera.`;
   elements['undo-toast'].hidden = false;
   undoTimer = setTimeout(hideUndo, 10000);
+  floatingPanel.update();
 }
 
 function followViewer(id, index, fromTrash) {
@@ -1080,6 +1085,7 @@ async function manageAlbum(action) {
   refreshControls();
   try {
     applyAlbumState(await action());
+    return true;
   } catch (error) {
     elements['album-select'].value = albumId;
     report(error);
@@ -1092,11 +1098,10 @@ async function manageAlbum(action) {
 elements['album-select'].onchange = event => {
   const destination = event.target.value;
   event.target.value = albumId;
-  if (destination !== albumId) manageAlbum(() => selectAlbum(db, destination));
+  chooseAlbum(destination);
 };
 elements['album-add'].onclick = () => {
-  const name = prompt('Nombre del nuevo álbum')?.trim();
-  if (name) manageAlbum(() => createAlbum(db, name));
+  createNamedAlbum(prompt('Nombre del nuevo álbum'));
 };
 elements['album-rename'].onclick = () => {
   const id = albumId;
@@ -1160,6 +1165,49 @@ elements['move-album-form'].onsubmit = async event => {
     render();
   }
 };
+
+function chooseAlbum(destination) {
+  if (destination !== albumId) return manageAlbum(() => selectAlbum(db, destination));
+}
+
+async function createNamedAlbum(value) {
+  const name = value?.trim();
+  if (!name || albumSwitchLocked()) return false;
+  return manageAlbum(() => createAlbum(db, name));
+}
+
+const floatingPanel = createFloatingPanel(() => {
+  const displaySurface = stream?.getVideoTracks()[0]?.getSettings().displaySurface;
+  return {
+    entries, albums, albumId,
+    albumName: elements['album-title'].textContent,
+    connected: !!stream,
+    running: !!stream && mode === 'running' && !picking,
+    toggleText: elements.toggle.textContent,
+    toggleDisabled: elements.toggle.disabled,
+    manualDisabled: elements.manual.disabled,
+    albumLocked: albumSwitchLocked(),
+    galleryLocked: galleryLocked(),
+    canUndo: undoIds.length > 0,
+    monitor: !!stream && (!displaySurface || displaySurface === 'monitor'),
+    notice: elements.notice.textContent
+  };
+}, {
+  toggle: () => elements.toggle.click(),
+  manual: () => elements.manual.click(),
+  discard: id => discard([id]),
+  undo: () => recover(undoIds),
+  selectAlbum: chooseAlbum,
+  createAlbum: createNamedAlbum,
+  load: async (id, original) => {
+    if (original) return loadImage(id);
+    const image = await read(db, 'images', id);
+    if (!image) throw new Error('Una captura ya no está disponible.');
+    return image.preview;
+  },
+  notice, report
+});
+elements['floating-panel'].onclick = floatingPanel.open;
 
 refreshControls();
 try {
