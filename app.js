@@ -1,7 +1,10 @@
 import { changed, sensitivityLevels, stabilityDetector, visualSummary } from './detection.js';
 import { scrollCoverage, sideMargins } from './capture-analysis.js';
 import { startSampling } from './sampling.js';
-import { openGallery, read, updateGallery, updateTrash } from './storage.js';
+import {
+  openGallery, read, readAlbum, readAlbumState, selectAlbum, createAlbum, renameAlbum,
+  deleteAlbum, moveImage, updateGallery, updateTrash
+} from './storage.js';
 import { moveToTrash, restoreOrder } from './trash.js';
 import { makePdf, makeZip } from './exports.js';
 
@@ -17,6 +20,10 @@ const sampleMs = 250;
 let db, stream, region, dragStart, draftRegion, dragId, viewerUrl;
 let entries = [];
 let trash = [];
+let albums = [];
+let albumId;
+let changingAlbum = false;
+let movingImageId;
 let mode = 'idle';
 let sharing = false;
 let picking = false;
@@ -46,7 +53,11 @@ function report(error) {
 }
 
 function galleryLocked() {
-  return exporting || clearing || importing || managingTrash;
+  return exporting || clearing || importing || managingTrash || changingAlbum;
+}
+
+function albumSwitchLocked() {
+  return !db || mode === 'running' || busy || galleryLocked();
 }
 
 function refreshControls() {
@@ -54,8 +65,8 @@ function refreshControls() {
   elements.share.disabled = active || sharing || !navigator.mediaDevices?.getDisplayMedia;
   elements.region.disabled = !active;
   elements.reset.disabled = !active || (!region && !picking);
-  elements.toggle.disabled = !active || !db || picking || clearing;
-  elements.manual.disabled = !active || !db || picking || busy || clearing;
+  elements.toggle.disabled = !active || !db || picking || clearing || changingAlbum;
+  elements.manual.disabled = !active || !db || picking || busy || clearing || changingAlbum;
   elements.finish.disabled = !active;
   elements.toggle.textContent = {
     idle: 'Iniciar captura', running: 'Pausar captura', paused: 'Reanudar captura'
@@ -65,6 +76,11 @@ function refreshControls() {
     idle: 'Fuente compartida', running: 'Captura activa', paused: 'Captura pausada'
   }[mode] : 'Sin fuente';
   const locked = galleryLocked();
+  const switchLocked = albumSwitchLocked();
+  for (const id of ['album-select', 'album-add', 'album-rename', 'album-delete']) {
+    elements[id].disabled = switchLocked;
+  }
+  elements['album-lock'].hidden = mode !== 'running';
   elements.pdf.disabled = elements.zip.disabled = elements.clear.disabled = !entries.length || locked;
   elements.attach.disabled = !db || locked;
   elements['trash-open'].disabled = !db || locked;
@@ -320,6 +336,7 @@ async function findVisualDuplicate(pixels, summary, token, galleryOrder) {
 
 async function save(pixels, token, manual = false, retained = false) {
   const time = Date.now();
+  const targetAlbum = albumId;
   const version = clearVersion;
   const cancelled = () => version !== clearVersion || (!manual && token !== generation);
   busy = true;
@@ -343,7 +360,7 @@ async function save(pixels, token, manual = false, retained = false) {
     const digest = await crypto.subtle.digest('SHA-256', data);
     const hash = `${width}x${height}:${Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')}`;
     if (cancelled()) return;
-    const current = (await read(db, 'gallery', 'order') ?? []).filter(entry => !entry.imported);
+    const current = (await readAlbum(db, targetAlbum)).order.filter(entry => !entry.imported);
     let duplicate = current.some(entry => entry.hash === hash);
     let summary;
     if (!duplicate) {
@@ -351,7 +368,7 @@ async function save(pixels, token, manual = false, retained = false) {
       if (!manual && current.length) {
         const match = await findVisualDuplicate(croppedPixels, summary, token, current);
         if (match) {
-          const updated = await read(db, 'gallery', 'order') ?? [];
+          const updated = (await readAlbum(db, targetAlbum)).order;
           duplicate = updated.some(entry => entry.id === match);
         }
       }
@@ -366,7 +383,7 @@ async function save(pixels, token, manual = false, retained = false) {
       const [png, preview] = await Promise.all([encode(output, 'image/png'), encode(thumb, 'image/jpeg', 0.8)]);
       if (cancelled()) return;
       const entry = { id: crypto.randomUUID(), time, width, height, hash, summary };
-      entries = await updateGallery(db, list => {
+      entries = await updateGallery(db, targetAlbum, list => {
         duplicate = list.some(item => item.hash === hash);
         return duplicate ? list : [...list, entry];
       }, store => { if (!duplicate) store.add({ png, preview }, entry.id); });
@@ -448,7 +465,8 @@ function makeCard(entry) {
   later.setAttribute('aria-label', 'Mover captura hacia el final');
   const move = button('Mover a…', () => moveToPosition(entry.id));
   const remove = button('Eliminar', () => discard([entry.id]));
-  controls.append(earlier, later, move, remove);
+  const transfer = button('Mover a álbum…', () => openMoveAlbum(entry.id));
+  controls.append(earlier, later, move, transfer, remove);
   footer.append(caption, controls);
   node.append(preview, footer);
   node.ondragstart = event => {
@@ -480,7 +498,7 @@ function makeCard(entry) {
     dragId = undefined;
     edit(list => reorder(list, moved, list.findIndex(item => item.id === entry.id)));
   };
-  const card = { node, img, caption, earlier, later, move, remove };
+  const card = { node, img, caption, earlier, later, move, remove, transfer };
   thumbnailObserver.observe(node);
   return card;
 }
@@ -510,6 +528,8 @@ function render() {
     card.later.disabled = locked || index === entries.length - 1;
     card.move.disabled = locked || entries.length < 2;
     card.remove.disabled = locked;
+    card.transfer.hidden = albums.length < 2;
+    card.transfer.disabled = locked;
     if (gallery.children[index] !== card.node) gallery.insertBefore(card.node, gallery.children[index] ?? null);
   });
   elements.count.textContent = entries.length;
@@ -548,9 +568,13 @@ function moveToPosition(id) {
 
 async function edit(change) {
   if (galleryLocked()) return;
+  const source = albumId;
   try {
-    entries = await updateGallery(db, change);
-    render();
+    const order = await updateGallery(db, source, change);
+    if (albumId === source) {
+      entries = order;
+      render();
+    }
   } catch (error) { report(error); }
 }
 
@@ -603,7 +627,7 @@ async function importImages(files) {
       return;
     }
     let missingAnchor = false;
-    entries = await updateGallery(db, list => {
+    entries = await updateGallery(db, albumId, list => {
       const index = mode === 'end' ? -1 : list.findIndex(entry => entry.id === anchor);
       missingAnchor = mode !== 'end' && index < 0;
       const at = index < 0 ? list.length : index + (mode === 'after' ? 1 : 0);
@@ -663,7 +687,7 @@ async function changeTrash(change) {
   updateViewerPosition();
   renderTrash();
   try {
-    const result = await updateTrash(db, change);
+    const result = await updateTrash(db, albumId, change);
     entries = result.order;
     trash = result.trash;
     if (undoIds.length && !trash.some(record => undoIds.includes(record.entry.id))) hideUndo();
@@ -898,7 +922,7 @@ async function download(type, build) {
   render();
   notice(`Preparando ${type.toUpperCase()}…`);
   try {
-    const selected = await read(db, 'gallery', 'order');
+    const selected = (await readAlbum(db, albumId)).order;
     if (!selected?.length) throw new Error('La galería está vacía.');
     const file = await build(selected, loadImage);
     const url = URL.createObjectURL(file);
@@ -915,12 +939,97 @@ async function download(type, build) {
 elements.pdf.onclick = () => download('pdf', makePdf);
 elements.zip.onclick = () => download('zip', makeZip);
 
+function albumOptions(select, choices) {
+  select.replaceChildren(...choices.map(album => new Option(album.name, album.id)));
+}
+
+function applyAlbumState({ active, albums: known }) {
+  if (active.id !== albumId) {
+    hideUndo();
+    resetDetection();
+  }
+  albums = known;
+  albumId = active.id;
+  entries = active.order;
+  trash = active.trash;
+  albumOptions(elements['album-select'], albums);
+  elements['album-select'].value = albumId;
+  elements['album-title'].textContent = active.name;
+  render();
+}
+
+async function manageAlbum(action) {
+  if (albumSwitchLocked()) return;
+  changingAlbum = true;
+  refreshControls();
+  try {
+    applyAlbumState(await action());
+  } catch (error) {
+    elements['album-select'].value = albumId;
+    report(error);
+  } finally {
+    changingAlbum = false;
+    render();
+  }
+}
+
+elements['album-select'].onchange = event => {
+  const destination = event.target.value;
+  event.target.value = albumId;
+  if (destination !== albumId) manageAlbum(() => selectAlbum(db, destination));
+};
+elements['album-add'].onclick = () => {
+  const name = prompt('Nombre del nuevo álbum')?.trim();
+  if (name) manageAlbum(() => createAlbum(db, name));
+};
+elements['album-rename'].onclick = () => {
+  const id = albumId;
+  const previous = albums.find(album => album.id === id).name;
+  const name = prompt('Nuevo nombre del álbum', previous)?.trim();
+  if (name && name !== previous) manageAlbum(() => renameAlbum(db, id, name));
+};
+elements['album-delete'].onclick = () => {
+  if (albumSwitchLocked()) return;
+  const id = albumId;
+  const name = albums.find(album => album.id === id).name;
+  if (confirm(`¿Eliminar el álbum «${name}» y todas sus imágenes, incluidas las de su papelera? Esta acción no se puede deshacer.`)) {
+    manageAlbum(() => deleteAlbum(db, id));
+  }
+};
+
+const moveDialog = elements['move-album-dialog'];
+function openMoveAlbum(id) {
+  if (galleryLocked() || albums.length < 2) return;
+  movingImageId = id;
+  albumOptions(elements['move-album-target'], albums.filter(album => album.id !== albumId));
+  moveDialog.showModal();
+}
+elements['move-album-cancel'].onclick = () => moveDialog.close();
+elements['move-album-form'].onsubmit = async event => {
+  event.preventDefault();
+  if (galleryLocked()) return;
+  const destination = elements['move-album-target'].value;
+  changingAlbum = true;
+  elements['move-album-confirm'].disabled = true;
+  render();
+  try {
+    entries = await moveImage(db, albumId, destination, movingImageId);
+    moveDialog.close();
+    notice('Imagen movida al álbum de destino.');
+  } catch (error) {
+    moveDialog.close();
+    report(error);
+  } finally {
+    changingAlbum = false;
+    elements['move-album-confirm'].disabled = false;
+    render();
+  }
+};
+
 refreshControls();
 try {
   db = await openGallery();
-  entries = await read(db, 'gallery', 'order') ?? [];
-  trash = await read(db, 'gallery', 'trash') ?? [];
-  render();
+  applyAlbumState(await readAlbumState(db));
   if (!navigator.mediaDevices?.getDisplayMedia) {
     notice('Abre SmartCapture en Chrome o Brave desde HTTPS o localhost para compartir pantalla.');
   }

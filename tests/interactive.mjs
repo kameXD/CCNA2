@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { inflateSync } from 'node:zlib';
+import { seedLegacy, verifyAlbums } from './albums.mjs';
 
 const profile = await mkdtemp(join(tmpdir(), 'smartcapture-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
@@ -98,6 +99,8 @@ try {
   const sourcePage = (await list()).find(page => page.id === targetId);
   const source = await connect(sourcePage.webSocketDebuggerUrl);
   await until(() => source.evalPage('typeof window.movePointer === "function"'), 'fuente interactiva');
+  const checkAlbums = process.argv.includes("--albums");
+  if (checkAlbums) await seedLegacy(source);
   await app.send('Page.navigate', { url: origin });
   await until(() => app.evalPage('!!document.querySelector("#share")?.onclick'), 'inicio de SmartCapture');
   const preview = process.argv.includes('--preview');
@@ -121,6 +124,20 @@ try {
   const click = (page, selector) => page.evalPage(`document.querySelector(${JSON.stringify(selector)}).click()`);
   const count = () => app.evalPage('Number(document.querySelector("#count").textContent)');
   const expectCount = n => until(async () => await count() === n, `captura ${n}`);
+  if (checkAlbums) await verifyAlbums({ app, click, expectCount, until });
+  else await verifyExisting({ app, click, count, expectCount, source, targetId, preview });
+} finally {
+  for (const socket of sockets) socket.close();
+  if (browser.exitCode === null && browser.signalCode === null) {
+    const exited = once(browser, 'exit');
+    browser.kill();
+    await exited;
+  }
+  server.close();
+  await rm(profile, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 });
+}
+
+async function verifyExisting({ app, click, count, expectCount, source, targetId, preview }) {
   await click(app, '#share');
   await until(() => app.evalPage('document.querySelector("#toggle")?.disabled === false'), 'permiso de captura');
   await click(app, '#toggle');
@@ -146,7 +163,7 @@ try {
   await app.evalPage(`(async () => {
     const {openGallery, updateGallery} = await import('./storage.js');
     const db = await openGallery();
-    await updateGallery(db, entries => {
+    await updateGallery(db, 'general', entries => {
       delete entries[0].summary;
       return entries;
     });
@@ -163,9 +180,9 @@ try {
   await expectCount(4);
   assert.ok(await app.evalPage(`(async () => {
     const video = document.querySelector('video');
-    const {openGallery, read} = await import('./storage.js');
+    const {openGallery, read, readAlbum} = await import('./storage.js');
     const db = await openGallery();
-    const entries = await read(db, 'gallery', 'order');
+    const entries = (await readAlbum(db, 'general')).order;
     const {png} = await read(db, 'images', entries.at(-1).id);
     const bitmap = await createImageBitmap(png);
     const same = bitmap.width === video.videoWidth && bitmap.height === video.videoHeight;
@@ -187,10 +204,10 @@ try {
   await step(0.91);
   await expectCount(7);
   const shifts = await app.evalPage(`(async () => {
-    const {openGallery,read}=await import('./storage.js');
+    const {openGallery,read,readAlbum}=await import('./storage.js');
     const {verticalShift}=await import('./capture-analysis.js');
     const db=await openGallery();
-    const entries=(await read(db,'gallery','order')).slice(-3);
+    const entries=((await readAlbum(db, 'general')).order).slice(-3);
     const frames=[];
     for (const entry of entries) {
       const {png}=await read(db,'images',entry.id);
@@ -215,9 +232,9 @@ try {
   await click(app, '#manual');
   await expectCount(8);
   const quality = await app.evalPage(`(async () => {
-    const {openGallery,read}=await import('./storage.js');
+    const {openGallery,read,readAlbum}=await import('./storage.js');
     const db=await openGallery();
-    const [full,cropped]=(await read(db,'gallery','order')).slice(-2);
+    const [full,cropped]=((await readAlbum(db, 'general')).order).slice(-2);
     const pngFor=async id=>(await read(db,'images',id)).png;
     const [fullBlob,cropBlob]=await Promise.all([pngFor(full.id),pngFor(cropped.id)]);
     async function raster(blob) {
@@ -553,13 +570,4 @@ try {
     });
   })()`),0,'vaciar la papelera elimina los originales de IndexedDB');
   console.log(`Chromium (${preview ? 'vista previa' : 'fotogramas directos'}): papelera, visor, deshacer, restauración, persistencia, exclusión de exportaciones y confirmación definitiva verificados.`);
-} finally {
-  for (const socket of sockets) socket.close();
-  if (browser.exitCode === null && browser.signalCode === null) {
-    const exited = once(browser, 'exit');
-    browser.kill();
-    await exited;
-  }
-  server.close();
-  await rm(profile, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 });
 }

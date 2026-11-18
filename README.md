@@ -4,6 +4,10 @@ SmartCapture guarda capturas de pantalla mientras recorres manualmente lecciones
 
 ## Cómo usarlo
 
+En **Álbum activo** puedes crear, elegir o renombrar un álbum. Las capturas y las importaciones nuevas se guardan en ese álbum. Usa **Mover a álbum…** en una tarjeta para añadirla al final de otro álbum. Pausa la captura automática antes de cambiar de álbum.
+
+Cada álbum conserva su galería, su orden y su papelera. PDF y ZIP exportan solo la galería del álbum activo. Al eliminar un álbum se pide confirmación para borrar definitivamente su galería y su papelera. Si eliminas el último, SmartCapture crea un álbum «General» vacío.
+
 1. Abre SmartCapture en una versión actual de Chrome o Brave desde una URL HTTPS o desde `localhost`.
 2. Pulsa **Compartir fuente** y elige en el selector del navegador una pestaña, ventana o pantalla. Compartir solo la pestaña de NetAcad evita capturar otras aplicaciones y la vista previa de SmartCapture.
 3. Para recortar la imagen, pulsa **Seleccionar región** y arrastra sobre la vista previa. **Imagen completa** restablece el encuadre. Si cambias el tamaño de la fuente o el contenido se mueve dentro de la ventana, comprueba el recorte.
@@ -33,6 +37,7 @@ Para probar localmente con Node.js instalado, ejecuta `npx --yes http-server . -
 - Cuando se identifica un desplazamiento vertical, SmartCapture guarda vistas intermedias para conservar al menos un 30 % de superposición entre los puntos que puede seguir. Una vista desplazada solo se omite por falta de contenido nuevo si muestra una franja uniforme y los píxeles de la parte común coinciden dentro de la tolerancia. Los saltos muy rápidos, cabeceras fijas grandes o desplazamientos en paneles con poco contraste pueden impedir esa alineación.
 - El recorte opcional comprueba cada lado por separado y solo quita columnas uniformes de un color neutro. Deja una reserva de ocho píxeles antes del contenido detectado. Los márgenes con sombras, gradientes, barras u otros elementos pueden quedar intactos.
 - IndexedDB guarda las capturas, los archivos importados, las miniaturas y el orden. Los datos pertenecen al perfil y origen actuales. Una recarga conserva la galería y termina la sesión de pantalla. El modo privado, el borrado de datos del sitio o las políticas y cuotas del navegador pueden limitar la persistencia. Exporta antes de depender de esos datos como respaldo.
+- Al actualizar desde una versión anterior, IndexedDB migra la galería y la papelera a «General». SmartCapture recuerda el último álbum utilizado al recargar.
 - La papelera se conserva al recargar. La restauración usa los identificadores de las imágenes vecinas y, si desaparecieron ambas referencias, la posición original más cercana. PDF y ZIP incluyen solo la galería activa. El espacio de una imagen eliminada se libera al borrarla definitivamente.
 - Para exportar se procesa una imagen original a la vez. Los archivos resultantes se construyen en el navegador y su tamaño puede afectar a dispositivos con poca memoria. El ZIP clásico admite hasta 65 535 entradas y menos de 4 GiB. Para sesiones grandes, exporta en tandas.
 
@@ -44,7 +49,7 @@ Para probar localmente con Node.js instalado, ejecuta `npx --yes http-server . -
 
 ## Verificación
 
-Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para compartir una pestaña interactiva real y comprobar la galería y la papelera, o añade `--preview` para comprobar la ruta que usa la vista previa. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
+Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para comprobar la captura, la galería y la papelera. Añade `--albums` para verificar los álbumes y la migración de una base de datos anterior, o `--preview` para usar la vista previa como fuente de fotogramas. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
 
 - En Chromium 156 para Linux, la prueba interactiva compartió una pestaña real con `getDisplayMedia` y mantuvo SmartCapture oculta. Verificó cambios de texto y diagrama, cursor, hover, duplicados de vistas anteriores, solapamiento al desplazar y resolución del PNG. Pasó con lectura directa de fotogramas y con la ruta de vista previa. También comprobó el recorte, la navegación del visor y el borrado confirmado con persistencia al recargar.
 - Un flujo de video sintético en Chromium permitió comprobar el recorte, la espera de estabilidad, cambios de pocos píxeles, duplicados, pausa, captura manual, reanudación, finalización, reordenación, ampliación, eliminación y persistencia después de recargar. También se comprobaron los umbrales RGB y el ajuste de la espera en Node.js.

@@ -48,6 +48,9 @@ input[type=number]{font:inherit;width:72px;padding:5px 6px;border:1px solid #414
 .gallery-head .hint{margin-top:4px}
 .import-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 15px;border-bottom:1px solid var(--line)}
 .import-controls select{font:inherit;color:inherit;background:#10131e;border:1px solid #414962;border-radius:6px;padding:5px}
+#album-select,#move-album-target{max-width:100%}
+#album-title{overflow-wrap:anywhere}
+#move-album-form{padding:12px 0 0;border-bottom:0}
 .import-controls .hint{flex-basis:100%}
 #gallery-panel.file-drop{outline:2px solid var(--accent);outline-offset:-2px}
 .count{margin-left:4px}

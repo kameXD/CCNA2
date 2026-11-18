@@ -40,7 +40,15 @@
     </div>
     <p id="notice" role="status" aria-live="polite"></p>
     <section id="gallery-panel" class="panel gallery" aria-labelledby="gallery-title">
-      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button><button id="clear" class="quiet" disabled>Eliminar todas</button><button id="trash-open" type="button" disabled>Papelera <span id="trash-count" class="count">0</span></button></div></div>
+      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería · <span id="album-title">General</span> <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button><button id="clear" class="quiet" disabled>Eliminar todas</button><button id="trash-open" type="button" disabled>Papelera <span id="trash-count" class="count">0</span></button></div></div>
+      <div class="import-controls">
+        <label for="album-select">Álbum activo</label>
+        <select id="album-select" disabled aria-describedby="album-lock"></select>
+        <button id="album-add" type="button" disabled>Crear álbum</button>
+        <button id="album-rename" type="button" disabled>Renombrar</button>
+        <button id="album-delete" type="button" class="danger" disabled>Eliminar álbum</button>
+        <p id="album-lock" class="hint" hidden>Pausa la captura automática para cambiar de álbum.</p>
+      </div>
       <div class="import-controls">
         <button id="attach" type="button" disabled>Adjuntar imágenes</button>
         <input id="image-files" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden>
@@ -57,6 +65,15 @@
       <ol id="gallery"></ol>
     </section>
   </main>
+  <dialog id="move-album-dialog" aria-labelledby="move-album-title">
+    <h2 id="move-album-title">Mover imagen a otro álbum</h2>
+    <form id="move-album-form" class="import-controls">
+      <label for="move-album-target">Álbum de destino</label>
+      <select id="move-album-target" required></select>
+      <button id="move-album-confirm" type="submit">Mover imagen</button>
+      <button id="move-album-cancel" type="button">Cancelar</button>
+    </form>
+  </dialog>
   <dialog id="trash-dialog" aria-labelledby="trash-title">
     <div class="viewer-head">
       <h2 id="trash-title">Papelera</h2>
