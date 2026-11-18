@@ -39,8 +39,20 @@
       </section>
     </div>
     <p id="notice" role="status" aria-live="polite"></p>
-    <section class="panel gallery" aria-labelledby="gallery-title">
+    <section id="gallery-panel" class="panel gallery" aria-labelledby="gallery-title">
       <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button><button id="clear" class="quiet" disabled>Eliminar todas</button></div></div>
+      <div class="import-controls">
+        <button id="attach" type="button" disabled>Adjuntar imágenes</button>
+        <input id="image-files" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden>
+        <label for="insert-mode">Insertar</label>
+        <select id="insert-mode">
+          <option value="end">Al final</option>
+          <option value="before">Antes de la imagen</option>
+          <option value="after">Después de la imagen</option>
+        </select>
+        <input id="insert-position" type="number" min="1" step="1" value="1" aria-label="Número de la imagen de referencia" required hidden>
+        <p class="hint">También puedes pegar con Ctrl + V o soltar archivos en la galería.</p>
+      </div>
       <div id="empty" class="empty">Las capturas aparecerán aquí.</div>
       <ol id="gallery"></ol>
     </section>

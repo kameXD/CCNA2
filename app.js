@@ -20,6 +20,7 @@ let picking = false;
 let busy = false;
 let exporting = false;
 let clearing = false;
+let importing = false;
 let clearVersion = 0;
 let viewerId;
 let viewerRequest = 0;
@@ -51,7 +52,14 @@ function refreshControls() {
   elements.status.textContent = active ? {
     idle: 'Fuente compartida', running: 'Captura activa', paused: 'Captura pausada'
   }[mode] : 'Sin fuente';
-  elements.pdf.disabled = elements.zip.disabled = elements.clear.disabled = !entries.length || exporting || clearing;
+  const galleryLocked = exporting || clearing || importing;
+  elements.pdf.disabled = elements.zip.disabled = elements.clear.disabled = !entries.length || galleryLocked;
+  elements.attach.disabled = !db || galleryLocked;
+  elements['insert-mode'].disabled = !entries.length || galleryLocked;
+  const position = elements['insert-position'];
+  position.hidden = !entries.length || elements['insert-mode'].value === 'end';
+  position.disabled = position.hidden || galleryLocked;
+  position.max = entries.length;
 }
 
 function resetDetection() {
@@ -322,7 +330,7 @@ async function save(pixels, token, manual = false, retained = false) {
     const digest = await crypto.subtle.digest('SHA-256', data);
     const hash = `${width}x${height}:${Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')}`;
     if (cancelled()) return;
-    const current = await read(db, 'gallery', 'order') ?? [];
+    const current = (await read(db, 'gallery', 'order') ?? []).filter(entry => !entry.imported);
     let duplicate = current.some(entry => entry.hash === hash);
     let summary;
     if (!duplicate) {
@@ -424,20 +432,21 @@ function makeCard(entry) {
   earlier.setAttribute('aria-label', 'Mover captura hacia el inicio');
   const later = button('→', () => moveRelative(entry.id, 1));
   later.setAttribute('aria-label', 'Mover captura hacia el final');
+  const move = button('Mover a…', () => moveToPosition(entry.id));
   const remove = button('Eliminar', () => edit(list => list.filter(item => item.id !== entry.id),
     store => store.delete(entry.id)));
-  controls.append(earlier, later, remove);
+  controls.append(earlier, later, move, remove);
   footer.append(caption, controls);
   node.append(preview, footer);
   node.ondragstart = event => {
-    if (exporting) { event.preventDefault(); return; }
+    if (exporting || clearing || importing) { event.preventDefault(); return; }
     dragId = entry.id;
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', dragId);
   };
   img.draggable = false;
   node.ondragover = event => {
-    if (dragId && dragId !== entry.id) {
+    if (!hasFiles(event) && dragId && dragId !== entry.id) {
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
       node.classList.add('drop');
@@ -451,14 +460,14 @@ function makeCard(entry) {
     gallery.querySelectorAll('.drop').forEach(element => element.classList.remove('drop'));
   };
   node.ondrop = event => {
-    if (!dragId || dragId === entry.id) return;
+    if (hasFiles(event) || !dragId || dragId === entry.id) return;
     event.preventDefault();
     node.classList.remove('drop');
     const moved = dragId;
     dragId = undefined;
     edit(list => reorder(list, moved, list.findIndex(item => item.id === entry.id)));
   };
-  const card = { node, img, caption, earlier, later, remove };
+  const card = { node, img, caption, earlier, later, move, remove };
   thumbnailObserver.observe(node);
   return card;
 }
@@ -480,9 +489,11 @@ function render() {
     const card = cards.get(entry.id);
     card.caption.textContent = `${index + 1} · ${dateFormat.format(entry.time)}`;
     card.caption.title = `${entry.width} × ${entry.height} px`;
-    card.earlier.disabled = exporting || index === 0;
-    card.later.disabled = exporting || index === entries.length - 1;
-    card.remove.disabled = exporting;
+    const locked = exporting || clearing || importing;
+    card.earlier.disabled = locked || index === 0;
+    card.later.disabled = locked || index === entries.length - 1;
+    card.move.disabled = locked || entries.length < 2;
+    card.remove.disabled = locked;
     if (gallery.children[index] !== card.node) gallery.insertBefore(card.node, gallery.children[index] ?? null);
   });
   elements.count.textContent = entries.length;
@@ -506,16 +517,131 @@ function moveRelative(id, offset) {
   });
 }
 
+function moveToPosition(id) {
+  const value = prompt(`Indica la posición de destino (1–${entries.length}).`,
+    entries.findIndex(entry => entry.id === id) + 1);
+  if (value === null) return;
+  const target = Number(value);
+  if (!Number.isInteger(target) || target < 1 || target > entries.length) {
+    notice('Introduce un número de posición válido.');
+    return;
+  }
+  edit(list => reorder(list, id, target - 1));
+}
+
 async function edit(change, imageChange) {
-  if (exporting || clearing) return;
+  if (exporting || clearing || importing) return;
   try {
     entries = await updateGallery(db, change, imageChange);
     render();
   } catch (error) { report(error); }
 }
 
+async function imageType(file) {
+  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if ([137, 80, 78, 71, 13, 10, 26, 10].every((byte, i) => bytes[i] === byte)) return 'image/png';
+  const header = String.fromCharCode(...bytes);
+  if (header.startsWith('RIFF') && header.slice(8) === 'WEBP') return 'image/webp';
+  throw new Error('Formato de imagen incompatible.');
+}
+
+async function prepareImport(file) {
+  const type = await imageType(file);
+  const original = file.type === type ? file : file.slice(0, file.size, type);
+  const bitmap = await createImageBitmap(original);
+  const { width, height } = bitmap;
+  const thumb = document.createElement('canvas');
+  const scale = Math.min(1, 320 / width, 200 / height);
+  thumb.width = Math.max(1, Math.round(width * scale));
+  thumb.height = Math.max(1, Math.round(height * scale));
+  try {
+    thumb.getContext('2d').drawImage(bitmap, 0, 0, thumb.width, thumb.height);
+  } finally { bitmap.close(); }
+  const preview = await encode(thumb, 'image/png');
+  return { entry: { id: crypto.randomUUID(), time: Date.now(), width, height, imported: true },
+    image: { original, preview } };
+}
+
+async function importImages(files) {
+  if (!files.length || !db || exporting || clearing || importing) return;
+  const position = elements['insert-position'];
+  const mode = position.hidden ? 'end' : elements['insert-mode'].value;
+  if (mode !== 'end' && !position.checkValidity()) {
+    notice('Introduce un número de imagen válido para la inserción.');
+    position.focus();
+    return;
+  }
+  const anchor = entries[position.valueAsNumber - 1]?.id;
+  importing = true;
+  render();
+  try {
+    const prepared = [];
+    for (const file of files) {
+      try { prepared.push(await prepareImport(file)); }
+      catch { /* An incompatible file does not prevent importing the rest. */ }
+    }
+    if (!prepared.length) {
+      notice('No se pudieron abrir las imágenes. Usa PNG, JPG, JPEG o WEBP válidos.');
+      return;
+    }
+    let missingAnchor = false;
+    entries = await updateGallery(db, list => {
+      const index = mode === 'end' ? -1 : list.findIndex(entry => entry.id === anchor);
+      missingAnchor = mode !== 'end' && index < 0;
+      const at = index < 0 ? list.length : index + (mode === 'after' ? 1 : 0);
+      return [...list.slice(0, at), ...prepared.map(item => item.entry), ...list.slice(at)];
+    }, store => {
+      for (const item of prepared) store.add(item.image, item.entry.id);
+    });
+    const rejected = files.length - prepared.length;
+    notice(`Imágenes importadas: ${prepared.length}.` +
+      (rejected ? ` Archivos incompatibles o dañados: ${rejected}.` : '') +
+      (missingAnchor ? ' La imagen de referencia ya no existe. Se añadieron al final.' : ''));
+  } catch (error) { report(error); }
+  finally { importing = false; render(); }
+}
+
+elements['insert-mode'].onchange = refreshControls;
+elements.attach.onclick = () => elements['image-files'].click();
+elements['image-files'].onchange = () => {
+  const input = elements['image-files'];
+  const files = [...input.files];
+  input.value = '';
+  importImages(files);
+};
+
+function hasFiles(event) {
+  return event.dataTransfer?.types.includes('Files');
+}
+
+const galleryPanel = elements['gallery-panel'];
+galleryPanel.ondragover = event => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = elements.attach.disabled ? 'none' : 'copy';
+  galleryPanel.classList.toggle('file-drop', !elements.attach.disabled);
+};
+galleryPanel.ondragleave = event => {
+  if (!(event.relatedTarget instanceof Node) || !galleryPanel.contains(event.relatedTarget)) {
+    galleryPanel.classList.remove('file-drop');
+  }
+};
+galleryPanel.ondrop = event => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  galleryPanel.classList.remove('file-drop');
+  importImages([...event.dataTransfer.files]);
+};
+document.addEventListener('paste', event => {
+  const files = [...(event.clipboardData?.files ?? [])];
+  if (!files.length) return;
+  event.preventDefault();
+  importImages(files);
+});
+
 elements.clear.onclick = async () => {
-  if (!entries.length || exporting || clearing ||
+  if (!entries.length || exporting || clearing || importing ||
       !confirm('¿Eliminar todas las capturas de la galería? Esta acción no se puede deshacer.')) return;
   clearing = true;
   clearVersion++;
@@ -528,10 +654,10 @@ elements.clear.onclick = async () => {
   finally { clearing = false; render(); }
 };
 
-async function loadPng(id) {
+async function loadImage(id) {
   const image = await read(db, 'images', id);
   if (!image) throw new Error('Una captura ya no está disponible.');
-  return image.png;
+  return image.original ?? image.png;
 }
 
 function updateViewerPosition() {
@@ -547,10 +673,10 @@ async function enlarge(entry) {
   const request = ++viewerRequest;
   viewerId = entry.id;
   updateViewerPosition();
-  const png = await loadPng(entry.id);
+  const image = await loadImage(entry.id);
   if (!viewer.open || request !== viewerRequest) return;
   if (viewerUrl) URL.revokeObjectURL(viewerUrl);
-  viewerUrl = URL.createObjectURL(png);
+  viewerUrl = URL.createObjectURL(image);
   large.src = viewerUrl;
   large.alt = `Captura del ${dateFormat.format(entry.time)}`;
   elements['viewer-title'].textContent = `Captura · ${entry.width} × ${entry.height} px`;
@@ -595,7 +721,7 @@ async function download(type, build) {
   try {
     const selected = await read(db, 'gallery', 'order');
     if (!selected?.length) throw new Error('La galería está vacía.');
-    const file = await build(selected, loadPng);
+    const file = await build(selected, loadImage);
     const url = URL.createObjectURL(file);
     const link = document.createElement('a');
     link.href = url;

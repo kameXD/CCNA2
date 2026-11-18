@@ -12,8 +12,9 @@ SmartCapture guarda capturas de pantalla mientras recorres manualmente lecciones
 6. Usa **Pausar captura** y **Reanudar captura** para controlar la detección automática. La captura manual sigue disponible durante la pausa. **Finalizar y dejar de compartir** libera la fuente y conserva la galería.
 7. Si el contenido tiene márgenes laterales vacíos, activa **Recortar márgenes laterales vacíos** antes de capturar. El recorte conserva la escala original y se aplica a las nuevas capturas.
 8. Pulsa una miniatura para abrir el visor. Navega en el orden actual de la galería con las flechas del visor o del teclado. Usa **Tamaño original** para inspeccionar detalles y **Escape** para cerrar el visor.
-9. Arrastra las tarjetas o usa sus flechas para cambiar el orden. **Eliminar** borra una captura. **Eliminar todas** solicita confirmación y pausa la captura automática si está activa.
-10. Exporta el orden actual como **PDF** de una imagen por página o **ZIP** de PNG numerados. El PDF conserva la cuadrícula de píxeles y comprime el RGB sin pérdida. El ZIP incluye los PNG guardados.
+9. Arrastra las tarjetas, usa sus flechas o pulsa **Mover a…** y escribe una posición. La galería renumera las imágenes según el orden resultante. **Eliminar** borra una captura. **Eliminar todas** solicita confirmación y pausa la captura automática si está activa.
+10. Para incorporar imágenes PNG, JPG/JPEG o WEBP, usa **Adjuntar imágenes**, pega con **Ctrl + V** o suelta los archivos en la galería. En **Insertar**, elige **Al final** o indica si deben ir antes o después de una imagen y escribe su número actual.
+11. Exporta el orden actual como **PDF** de una imagen por página o **ZIP** de archivos numerados en su formato original. El PDF conserva las dimensiones de píxeles y comprime el RGB sin pérdida. En PDF, las transparencias se muestran sobre blanco y los archivos animados se representan como una imagen estática. El ZIP conserva los bytes originales.
 
 ## Publicación en GitHub Pages
 
@@ -31,7 +32,7 @@ Para probar localmente con Node.js instalado, ejecuta `npx --yes http-server . -
 - Un hash evita duplicados exactos en toda la galería, incluida la captura manual. Para la captura automática, el análisis usa un resumen de color para descartar candidatos diferentes y compara hasta 16 candidatos recientes a resolución original, uno por vez. La captura manual permite conservar variantes visualmente similares.
 - Cuando se identifica un desplazamiento vertical, SmartCapture guarda vistas intermedias para conservar al menos un 30 % de superposición entre los puntos que puede seguir. Una vista desplazada solo se omite por falta de contenido nuevo si muestra una franja uniforme y los píxeles de la parte común coinciden dentro de la tolerancia. Los saltos muy rápidos, cabeceras fijas grandes o desplazamientos en paneles con poco contraste pueden impedir esa alineación.
 - El recorte opcional comprueba cada lado por separado y solo quita columnas uniformes de un color neutro. Deja una reserva de ocho píxeles antes del contenido detectado. Los márgenes con sombras, gradientes, barras u otros elementos pueden quedar intactos.
-- IndexedDB guarda los PNG, las miniaturas y el orden. Los datos pertenecen al perfil y origen actuales. Una recarga conserva la galería y termina la sesión de pantalla. El modo privado, el borrado de datos del sitio o las políticas y cuotas del navegador pueden limitar la persistencia. Exporta antes de depender de esos datos como respaldo.
+- IndexedDB guarda las capturas, los archivos importados, las miniaturas y el orden. Los datos pertenecen al perfil y origen actuales. Una recarga conserva la galería y termina la sesión de pantalla. El modo privado, el borrado de datos del sitio o las políticas y cuotas del navegador pueden limitar la persistencia. Exporta antes de depender de esos datos como respaldo.
 - Para exportar se procesa una imagen original a la vez. Los archivos resultantes se construyen en el navegador y su tamaño puede afectar a dispositivos con poca memoria. El ZIP clásico admite hasta 65 535 entradas y menos de 4 GiB. Para sesiones grandes, exporta en tandas.
 
 ## Limitaciones del navegador

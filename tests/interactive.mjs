@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
@@ -256,6 +256,7 @@ try {
   })()`);
   assert.ok(quality.width < quality.original && quality.nativePixels, 'recorte sin remuestreo ni píxeles alterados');
   const download = async type => {
+    await app.evalPage(`delete captureExports.${type}`);
     await click(app, '#' + type);
     await until(() => app.evalPage(`!!captureExports.${type}`), 'exportación ' + type);
     return Buffer.from(await app.evalPage(`captureExports.${type}`), 'base64');
@@ -312,7 +313,130 @@ try {
   await until(() => app.evalPage('!document.querySelector("#viewer").open'), 'cerrar con Escape');
   console.log('Visor verificado.');
 
+  const galleryIds = () => app.evalPage('[...document.querySelectorAll(".card")].map(card => card.dataset.id)');
+  const existing = await galleryIds();
+  const fixtures = await app.evalPage(`(async () => {
+    const formats = ['image/png', 'image/jpeg', 'image/webp'];
+    return formats.map((type,index) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 71 + index;
+      canvas.height = 55 + index;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = ['#e31206', '#164acc', '#17aa31'][index];
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      return canvas.toDataURL(type).split(',')[1];
+    });
+  })()`);
+  const paths = ['adjunto.png', 'adjunto.jpeg', 'arrastrado.webp'].map(name => join(profile, name));
+  await Promise.all(paths.map((path,index) => writeFile(path, Buffer.from(fixtures[index], 'base64'))));
+  const invalid = join(profile, 'dañado.jpg');
+  await writeFile(invalid, 'archivo de prueba sin imagen');
+  const {root} = await app.send('DOM.getDocument');
+  const {nodeId} = await app.send('DOM.querySelector', {nodeId:root.nodeId, selector:'#image-files'});
+  await app.send('DOM.setFileInputFiles', {nodeId, files:[...paths.slice(0,2),invalid]});
+  await expectCount(10);
+  assert.match(await app.evalPage('document.querySelector("#notice").textContent'), /dañados: 1/);
+  const attached = (await galleryIds()).slice(-2);
+  assert.deepEqual((await galleryIds()).slice(0,8), existing);
+
+  const insert = (mode, position) => app.evalPage(`(() => {
+    const select=document.querySelector('#insert-mode');
+    select.value='${mode}';
+    select.dispatchEvent(new Event('change'));
+    document.querySelector('#insert-position').value=${position};
+  })()`);
+  await insert('before', 1);
+  await app.send('Browser.grantPermissions', {origin, permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
+  await app.evalPage(`(async()=>{
+    const blob=await fetch('data:image/png;base64,${fixtures[0]}').then(r=>r.blob());
+    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+    document.querySelector('#insert-position').focus();
+  })()`);
+  for (const type of ['keyDown','keyUp']) {
+    await app.send('Input.dispatchKeyEvent', {type,key:'v',code:'KeyV',modifiers:2,windowsVirtualKeyCode:86});
+  }
+  await expectCount(11);
+  const pasted = (await galleryIds())[0];
+  assert.equal((await galleryIds())[1], existing[0]);
+
+  await insert('after', 2);
+  const drop = await app.evalPage(`(() => {
+    const panel = document.querySelector('#gallery-panel');
+    panel.scrollIntoView({block:'start'});
+    const {left,top}=panel.getBoundingClientRect();
+    return {x:left+20,y:Math.max(1,top)+20};
+  })()`);
+  for (const type of ['dragEnter','dragOver','drop']) {
+    await app.send('Input.dispatchDragEvent', {...drop,type,data:{items:[],files:[paths[2]],dragOperationsMask:1}});
+  }
+  await expectCount(12);
+  const draggedFile = (await galleryIds())[2];
+  await app.evalPage(`(() => {
+    const cards = document.querySelectorAll('.card');
+    const from = cards[cards.length-1], to = cards[0];
+    const dataTransfer = new DataTransfer();
+    for (const [node,type] of [[from,'dragstart'],[to,'dragover'],[to,'drop'],[from,'dragend']]) {
+      node.dispatchEvent(new DragEvent(type,{dataTransfer,bubbles:true,cancelable:true}));
+    }
+  })()`);
+  await until(async () => (await galleryIds())[0] === attached[1], 'reordenar con arrastre');
   await app.send('Page.enable');
+  const prompt = app.nextEvent('Page.javascriptDialogOpening');
+  const moveClick = click(app, '.card:first-child .card-footer button:nth-child(3)');
+  assert.equal((await prompt).type, 'prompt');
+  await app.send('Page.handleJavaScriptDialog', {accept:true,promptText:'4'});
+  await moveClick;
+  await until(async () => (await galleryIds())[3] === attached[1], 'mover a una posición');
+  const ordered = [pasted,existing[0],draggedFile,attached[1],...existing.slice(1),attached[0]];
+  assert.deepEqual(await galleryIds(), ordered);
+  assert.deepEqual(await app.evalPage(`[...document.querySelectorAll('.card-footer span')].map(
+    item => Number(item.textContent.split(' · ')[0]))`), ordered.map((_,i) => i+1));
+
+  const mixedZip = await download('zip');
+  const zipped = [];
+  for (let offset = 0; mixedZip.readUInt32LE(offset) === 0x04034b50;) {
+    const size = mixedZip.readUInt32LE(offset+18);
+    const nameLength = mixedZip.readUInt16LE(offset+26);
+    const name = mixedZip.toString('utf8',offset+30,offset+30+nameLength);
+    const dataOffset = offset+30+nameLength+mixedZip.readUInt16LE(offset+28);
+    zipped.push([name,mixedZip.subarray(dataOffset,dataOffset+size)]);
+    offset = dataOffset+size;
+  }
+  assert.equal(zipped.length, ordered.length);
+  for (const [id,index,extension] of [[draggedFile,2,'webp'],[attached[1],1,'jpg'],[attached[0],0,'png']]) {
+    const at = ordered.indexOf(id);
+    assert.equal(zipped[at][0], `captura-${String(at+1).padStart(4,'0')}.${extension}`);
+    assert.deepEqual(zipped[at][1], Buffer.from(fixtures[index],'base64'));
+  }
+  const mixedPdf = await download('pdf');
+  const pdfImages = [...mixedPdf.toString('latin1').matchAll(
+    /\/Subtype \/Image \/Width (\d+) \/Height (\d+) \/ColorSpace \/DeviceRGB \/BitsPerComponent 8 \/Filter \/FlateDecode \/Length (\d+) >>\nstream\n/g)];
+  assert.equal(pdfImages.length, ordered.length);
+  for (const [id,width] of [[pasted,71],[draggedFile,73],[attached[1],72],[attached[0],71]]) {
+    const item = pdfImages[ordered.indexOf(id)];
+    assert.equal(Number(item[1]), width);
+    assert.equal(Number(item[2]), width-16);
+  }
+  for (const [id,index,type] of [[draggedFile,2,'webp'],[attached[1],1,'jpeg']]) {
+    const item = pdfImages[ordered.indexOf(id)];
+    const start = item.index + item[0].length;
+    const rgb = await app.evalPage(`(async () => {
+      const file = await fetch('data:image/${type};base64,${fixtures[index]}').then(r=>r.blob());
+      const bmp = await createImageBitmap(file);
+      const canvas = new OffscreenCanvas(bmp.width,bmp.height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bmp,0,0);
+      bmp.close();
+      const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+      return btoa(Array.from(pixels).filter((_,i)=>i%4!==3).map(channel=>String.fromCharCode(channel)).join(''));
+    })()`);
+    assert.deepEqual(inflateSync(mixedPdf.subarray(start,start+Number(item[3]))),Buffer.from(rgb,'base64'));
+  }
+  await app.send('Page.reload');
+  await expectCount(12);
+  assert.deepEqual(await galleryIds(), ordered, 'orden y capturas tras recargar');
+  console.log('Adjuntos, Ctrl + V, soltar archivos, numeración y orden en IndexedDB, PDF y ZIP verificados.');
+
   for (const accept of [false, true]) {
     const opened = app.nextEvent('Page.javascriptDialogOpening');
     const clicked = click(app, '#clear');
@@ -320,7 +444,7 @@ try {
     assert.equal(dialog.type, 'confirm');
     await app.send('Page.handleJavaScriptDialog', {accept});
     await clicked;
-    await expectCount(accept ? 0 : 8);
+    await expectCount(accept ? 0 : 12);
   }
   await app.send('Page.reload');
   await until(() => app.evalPage('!document.querySelector("#empty")?.hidden'), 'galería vacía después de recargar');

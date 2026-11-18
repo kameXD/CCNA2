@@ -17,14 +17,15 @@ export async function makeZip(entries, load) {
   let offset = 0;
   let directorySize = 0;
   for (const [index, entry] of entries.entries()) {
-    const png = await load(entry.id);
-    const name = encoder.encode(`captura-${String(index + 1).padStart(4, '0')}.png`);
+    const image = await load(entry.id);
+    const extension = { 'image/jpeg': 'jpg', 'image/webp': 'webp' }[image.type] ?? 'png';
+    const name = encoder.encode(`captura-${String(index + 1).padStart(4, '0')}.${extension}`);
     const date = new Date(entry.time);
     const dosTime = date.getHours() * 2048 + date.getMinutes() * 32 + (date.getSeconds() >> 1);
     const dosDate = (Math.max(1980, Math.min(2107, date.getFullYear())) - 1980) * 512 +
       (date.getMonth() + 1) * 32 + date.getDate();
     let crc = 0xffffffff;
-    const reader = png.stream().getReader();
+    const reader = image.stream().getReader();
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -36,21 +37,21 @@ export async function makeZip(entries, load) {
       view.setUint16(pos + 6, dosTime, true);
       view.setUint16(pos + 8, dosDate, true);
       view.setUint32(pos + 10, crc, true);
-      view.setUint32(pos + 14, png.size, true);
-      view.setUint32(pos + 18, png.size, true);
+      view.setUint32(pos + 14, image.size, true);
+      view.setUint32(pos + 18, image.size, true);
       view.setUint16(pos + 22, name.length, true);
     }
     files.push(record(30, view => {
       view.setUint32(0, 0x04034b50, true);
       fileInfo(view, 4);
-    }), name, png);
+    }), name, image);
     directory.push(record(46, view => {
       view.setUint32(0, 0x02014b50, true);
       view.setUint16(4, 20, true);
       fileInfo(view, 6);
       view.setUint32(42, offset, true);
     }), name);
-    offset += 30 + name.length + png.size;
+    offset += 30 + name.length + image.size;
     directorySize += 46 + name.length;
     if (offset + directorySize + 22 >= 0xffffffff) throw new Error('El ZIP supera el límite de 4 GiB.');
   }
@@ -64,10 +65,12 @@ export async function makeZip(entries, load) {
   return new Blob([...files, ...directory, end], { type: 'application/zip' });
 }
 
-async function pdfImage(png, canvas, context) {
-  const bitmap = await createImageBitmap(png);
+async function pdfImage(image, canvas, context) {
+  const bitmap = await createImageBitmap(image);
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
   // Compress RGB rows incrementally without retaining a full second RGB buffer.
