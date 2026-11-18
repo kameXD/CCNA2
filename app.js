@@ -1,11 +1,13 @@
 import { changed, sensitivityLevels, stabilityDetector, visualSummary } from './detection.js';
 import { scrollCoverage, sideMargins } from './capture-analysis.js';
 import { startSampling } from './sampling.js';
-import { openGallery, read, updateGallery } from './storage.js';
+import { openGallery, read, updateGallery, updateTrash } from './storage.js';
+import { moveToTrash, restoreOrder } from './trash.js';
 import { makePdf, makeZip } from './exports.js';
 
 const elements = Object.fromEntries([...document.querySelectorAll('[id]')].map(el => [el.id, el]));
 const { video, stage, surface, selection, gallery, viewer, large } = elements;
+const trashDialog = elements['trash-dialog'];
 const canvas = document.createElement('canvas');
 const context = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
 const detector = stabilityDetector();
@@ -14,6 +16,7 @@ const duplicateSensitivity = [1, 2, 8];
 const sampleMs = 250;
 let db, stream, region, dragStart, draftRegion, dragId, viewerUrl;
 let entries = [];
+let trash = [];
 let mode = 'idle';
 let sharing = false;
 let picking = false;
@@ -21,8 +24,13 @@ let busy = false;
 let exporting = false;
 let clearing = false;
 let importing = false;
+let managingTrash = false;
+let undoIds = [];
+let undoTimer;
 let clearVersion = 0;
 let viewerId;
+let displayedId;
+let viewerInTrash = false;
 let viewerRequest = 0;
 let generation = 0;
 let stopSampling;
@@ -35,6 +43,10 @@ function report(error) {
   notice(error.name === 'QuotaExceededError'
     ? 'El almacenamiento está lleno. Exporta y elimina algunas capturas para continuar.'
     : error.message || 'Ocurrió un error inesperado.');
+}
+
+function galleryLocked() {
+  return exporting || clearing || importing || managingTrash;
 }
 
 function refreshControls() {
@@ -52,13 +64,14 @@ function refreshControls() {
   elements.status.textContent = active ? {
     idle: 'Fuente compartida', running: 'Captura activa', paused: 'Captura pausada'
   }[mode] : 'Sin fuente';
-  const galleryLocked = exporting || clearing || importing;
-  elements.pdf.disabled = elements.zip.disabled = elements.clear.disabled = !entries.length || galleryLocked;
-  elements.attach.disabled = !db || galleryLocked;
-  elements['insert-mode'].disabled = !entries.length || galleryLocked;
+  const locked = galleryLocked();
+  elements.pdf.disabled = elements.zip.disabled = elements.clear.disabled = !entries.length || locked;
+  elements.attach.disabled = !db || locked;
+  elements['trash-open'].disabled = !db || locked;
+  elements['insert-mode'].disabled = !entries.length || locked;
   const position = elements['insert-position'];
   position.hidden = !entries.length || elements['insert-mode'].value === 'end';
-  position.disabled = position.hidden || galleryLocked;
+  position.disabled = position.hidden || locked;
   position.max = entries.length;
 }
 
@@ -374,10 +387,11 @@ async function save(pixels, token, manual = false, retained = false) {
 }
 
 const cards = new Map();
+const trashCards = new Map();
 const thumbnailObserver = new IntersectionObserver(items => {
   for (const item of items) {
-    const card = cards.get(item.target.dataset.id);
-    if (!card) continue;
+    const card = (item.target.parentElement === elements['trash-list'] ? trashCards : cards).get(item.target.dataset.id);
+    if (card?.node !== item.target) continue;
     card.visible = item.isIntersecting;
     if (card.visible) loadThumbnail(card).catch(report);
     else releaseThumbnail(card);
@@ -433,13 +447,12 @@ function makeCard(entry) {
   const later = button('→', () => moveRelative(entry.id, 1));
   later.setAttribute('aria-label', 'Mover captura hacia el final');
   const move = button('Mover a…', () => moveToPosition(entry.id));
-  const remove = button('Eliminar', () => edit(list => list.filter(item => item.id !== entry.id),
-    store => store.delete(entry.id)));
+  const remove = button('Eliminar', () => discard([entry.id]));
   controls.append(earlier, later, move, remove);
   footer.append(caption, controls);
   node.append(preview, footer);
   node.ondragstart = event => {
-    if (exporting || clearing || importing) { event.preventDefault(); return; }
+    if (galleryLocked()) { event.preventDefault(); return; }
     dragId = entry.id;
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', dragId);
@@ -474,22 +487,25 @@ function makeCard(entry) {
 
 const dateFormat = new Intl.DateTimeFormat('es', { dateStyle: 'short', timeStyle: 'medium' });
 
-function render() {
-  const ids = new Set(entries.map(entry => entry.id));
-  for (const [id, card] of cards) {
+function removeStaleCards(collection, ids) {
+  for (const [id, card] of collection) {
     if (ids.has(id)) continue;
     card.visible = false;
     releaseThumbnail(card);
     thumbnailObserver.unobserve(card.node);
     card.node.remove();
-    cards.delete(id);
+    collection.delete(id);
   }
+}
+
+function render() {
+  removeStaleCards(cards, new Set(entries.map(entry => entry.id)));
+  const locked = galleryLocked();
   entries.forEach((entry, index) => {
     if (!cards.has(entry.id)) cards.set(entry.id, makeCard(entry));
     const card = cards.get(entry.id);
     card.caption.textContent = `${index + 1} · ${dateFormat.format(entry.time)}`;
     card.caption.title = `${entry.width} × ${entry.height} px`;
-    const locked = exporting || clearing || importing;
     card.earlier.disabled = locked || index === 0;
     card.later.disabled = locked || index === entries.length - 1;
     card.move.disabled = locked || entries.length < 2;
@@ -498,6 +514,7 @@ function render() {
   });
   elements.count.textContent = entries.length;
   elements.empty.hidden = entries.length > 0;
+  renderTrash();
   updateViewerPosition();
   refreshControls();
 }
@@ -529,10 +546,10 @@ function moveToPosition(id) {
   edit(list => reorder(list, id, target - 1));
 }
 
-async function edit(change, imageChange) {
-  if (exporting || clearing || importing) return;
+async function edit(change) {
+  if (galleryLocked()) return;
   try {
-    entries = await updateGallery(db, change, imageChange);
+    entries = await updateGallery(db, change);
     render();
   } catch (error) { report(error); }
 }
@@ -564,7 +581,7 @@ async function prepareImport(file) {
 }
 
 async function importImages(files) {
-  if (!files.length || !db || exporting || clearing || importing) return;
+  if (!files.length || !db || galleryLocked()) return;
   const position = elements['insert-position'];
   const mode = position.hidden ? 'end' : elements['insert-mode'].value;
   if (mode !== 'end' && !position.checkValidity()) {
@@ -640,19 +657,157 @@ document.addEventListener('paste', event => {
   importImages(files);
 });
 
-elements.clear.onclick = async () => {
-  if (!entries.length || exporting || clearing || importing ||
-      !confirm('¿Eliminar todas las capturas de la galería? Esta acción no se puede deshacer.')) return;
-  clearing = true;
-  clearVersion++;
-  if (mode === 'running') setMode('paused');
+async function changeTrash(change) {
+  managingTrash = true;
   refreshControls();
+  updateViewerPosition();
+  renderTrash();
   try {
-    entries = await updateGallery(db, () => [], store => store.clear());
-    notice('Se eliminaron todas las capturas.');
+    const result = await updateTrash(db, change);
+    entries = result.order;
+    trash = result.trash;
+    if (undoIds.length && !trash.some(record => undoIds.includes(record.entry.id))) hideUndo();
+    return result;
   } catch (error) { report(error); }
-  finally { clearing = false; render(); }
+  finally { managingTrash = false; render(); }
+}
+
+function placeUndo() {
+  const toast = elements['undo-toast'];
+  const parent = viewer.open ? viewer : trashDialog.open ? trashDialog : document.body;
+  if (toast.parentElement !== parent) parent.append(toast);
+}
+
+function hideUndo() {
+  clearTimeout(undoTimer);
+  undoIds = [];
+  elements['undo-toast'].hidden = true;
+}
+
+function showUndo(ids) {
+  if (!ids.length) return;
+  hideUndo();
+  undoIds = ids;
+  placeUndo();
+  elements['undo-message'].textContent = ids.length === 1
+    ? 'Imagen enviada a la papelera.' : `${ids.length} imágenes enviadas a la papelera.`;
+  elements['undo-toast'].hidden = false;
+  undoTimer = setTimeout(hideUndo, 10000);
+}
+
+function followViewer(id, index, fromTrash) {
+  if (!viewer.open || viewerId !== id || viewerInTrash !== fromTrash) return;
+  const current = viewerEntries();
+  if (current.some(entry => entry.id === id)) return;
+  const next = current[Math.min(index, current.length - 1)];
+  if (next) enlarge(next, fromTrash).catch(report);
+  else viewer.close();
+}
+
+async function discard(ids) {
+  if (!db || galleryLocked()) return;
+  const id = viewerId;
+  const index = entries.findIndex(entry => entry.id === id);
+  const all = ids === undefined;
+  if (all) {
+    clearing = true;
+    clearVersion++;
+    if (mode === 'running') setMode('paused');
+  }
+  try {
+    const result = await changeTrash((order, deleted) =>
+      moveToTrash(order, deleted, ids ?? order.map(entry => entry.id)));
+    if (!result?.moved.length) return;
+    followViewer(id, index, false);
+    showUndo(result.moved);
+  } finally {
+    if (all) {
+      clearing = false;
+      render();
+    }
+  }
+}
+
+async function recover(ids) {
+  if (!db || galleryLocked()) return;
+  const id = viewerId;
+  const index = trash.findIndex(record => record.entry.id === id);
+  const result = await changeTrash((order, deleted) => {
+    const selected = new Set(ids ?? deleted.map(record => record.entry.id));
+    return {
+      order: restoreOrder(order, deleted, selected),
+      trash: deleted.filter(record => !selected.has(record.entry.id))
+    };
+  });
+  if (result) followViewer(id, index, true);
+}
+
+async function purge(ids) {
+  if (!db || galleryLocked() || !trash.length) return;
+  const message = ids ? '¿Eliminar esta imagen definitivamente?' : '¿Vaciar la papelera definitivamente?';
+  if (!confirm(message)) return;
+  const selected = ids && new Set(ids);
+  await changeTrash((order, deleted) => ({
+    order,
+    trash: selected ? deleted.filter(record => !selected.has(record.entry.id)) : [],
+    purge: deleted.map(record => record.entry.id).filter(id => !selected || selected.has(id))
+  }));
+}
+
+function renderTrash() {
+  elements['trash-count'].textContent = trash.length;
+  const locked = galleryLocked();
+  elements['undo-delete'].disabled = locked;
+  if (!trashDialog.open) return;
+  elements['trash-empty'].hidden = trash.length > 0;
+  elements['restore-all'].disabled = elements['empty-trash'].disabled = locked || !trash.length;
+  removeStaleCards(trashCards, new Set(trash.map(record => record.entry.id)));
+  const list = elements['trash-list'];
+  trash.forEach(({ entry }, index) => {
+    if (!trashCards.has(entry.id)) {
+      const node = document.createElement('li');
+      node.className = 'card';
+      node.dataset.id = entry.id;
+      const preview = button('', () => enlarge(entry, true).catch(report));
+      preview.className = 'thumb';
+      preview.setAttribute('aria-label', 'Ampliar imagen eliminada');
+      const img = document.createElement('img');
+      img.alt = '';
+      preview.append(img);
+      const footer = document.createElement('div');
+      footer.className = 'card-footer';
+      const restore = button('Restaurar', () => recover([entry.id]));
+      const remove = button('Eliminar definitivamente', () => purge([entry.id]));
+      remove.className = 'danger';
+      footer.append(restore, remove);
+      node.append(preview, footer);
+      thumbnailObserver.observe(node);
+      trashCards.set(entry.id, { node, img, restore, remove });
+    }
+    const card = trashCards.get(entry.id);
+    card.restore.disabled = card.remove.disabled = locked;
+    if (list.children[index] !== card.node) list.insertBefore(card.node, list.children[index] ?? null);
+  });
+}
+
+elements.clear.onclick = () => discard();
+elements['undo-delete'].onclick = () => recover(undoIds);
+elements['trash-open'].onclick = () => {
+  trashDialog.showModal();
+  placeUndo();
+  renderTrash();
 };
+trashDialog.addEventListener('close', () => {
+  if (trashDialog.open) return;
+  removeStaleCards(trashCards, new Set());
+  placeUndo();
+});
+elements['restore-all'].onclick = () => recover();
+elements['empty-trash'].onclick = () => purge();
+
+function viewerEntries() {
+  return viewerInTrash ? trash.map(record => record.entry) : entries;
+}
 
 async function loadImage(id) {
   const image = await read(db, 'images', id);
@@ -661,17 +816,25 @@ async function loadImage(id) {
 }
 
 function updateViewerPosition() {
-  const index = entries.findIndex(entry => entry.id === viewerId);
-  elements['viewer-count'].value = index < 0 ? '' : `${index + 1} de ${entries.length}`;
-  elements['viewer-prev'].disabled = index <= 0;
-  elements['viewer-next'].disabled = index < 0 || index === entries.length - 1;
+  const list = viewerEntries();
+  const index = list.findIndex(entry => entry.id === viewerId);
+  elements['viewer-count'].value = index < 0 ? '' : `${index + 1} de ${list.length}`;
+  elements['viewer-prev'].disabled = managingTrash || index <= 0;
+  elements['viewer-next'].disabled = managingTrash || index < 0 || index === list.length - 1;
+  elements['viewer-delete'].hidden = viewerInTrash;
+  elements['viewer-restore'].hidden = !viewerInTrash;
+  elements['viewer-delete'].disabled = elements['viewer-restore'].disabled =
+    galleryLocked() || index < 0 || displayedId !== viewerId;
   return index;
 }
 
-async function enlarge(entry) {
+async function enlarge(entry, fromTrash = false) {
   if (!viewer.open) viewer.showModal();
+  placeUndo();
   const request = ++viewerRequest;
   viewerId = entry.id;
+  displayedId = undefined;
+  viewerInTrash = fromTrash;
   updateViewerPosition();
   const image = await loadImage(entry.id);
   if (!viewer.open || request !== viewerRequest) return;
@@ -681,14 +844,27 @@ async function enlarge(entry) {
   large.alt = `Captura del ${dateFormat.format(entry.time)}`;
   elements['viewer-title'].textContent = `Captura · ${entry.width} × ${entry.height} px`;
   large.parentElement.scrollTo(0, 0);
+  try {
+    await large.decode();
+  } catch (error) {
+    if (!viewer.open || request !== viewerRequest) return;
+    throw error;
+  }
+  if (viewer.open && request === viewerRequest) {
+    displayedId = entry.id;
+    updateViewerPosition();
+  }
 }
 
 function navigateViewer(direction) {
+  if (managingTrash) return;
   const index = updateViewerPosition();
-  const entry = index < 0 ? undefined : entries[index + direction];
-  if (entry) enlarge(entry).catch(report);
+  const entry = index < 0 ? undefined : viewerEntries()[index + direction];
+  if (entry) enlarge(entry, viewerInTrash).catch(report);
 }
 
+elements['viewer-delete'].onclick = () => discard([viewerId]);
+elements['viewer-restore'].onclick = () => recover([viewerId]);
 elements['viewer-prev'].onclick = () => navigateViewer(-1);
 elements['viewer-next'].onclick = () => navigateViewer(1);
 viewer.addEventListener('keydown', event => {
@@ -708,6 +884,9 @@ viewer.addEventListener('close', () => {
   if (viewer.open) return;
   viewerRequest++;
   viewerId = undefined;
+  displayedId = undefined;
+  viewerInTrash = false;
+  placeUndo();
   if (viewer.classList.contains('original')) elements.zoom.click();
   large.removeAttribute('src');
   if (viewerUrl) URL.revokeObjectURL(viewerUrl);
@@ -740,6 +919,7 @@ refreshControls();
 try {
   db = await openGallery();
   entries = await read(db, 'gallery', 'order') ?? [];
+  trash = await read(db, 'gallery', 'trash') ?? [];
   render();
   if (!navigator.mediaDevices?.getDisplayMedia) {
     notice('Abre SmartCapture en Chrome o Brave desde HTTPS o localhost para compartir pantalla.');

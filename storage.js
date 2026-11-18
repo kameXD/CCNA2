@@ -35,3 +35,29 @@ export function updateGallery(db, change, imageChange) {
     };
   });
 }
+
+// Both lists and any permanent image deletions commit together. Keeping trash
+// metadata in the existing store allows old galleries to open without migration.
+export function updateTrash(db, change) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(['gallery', 'images'], 'readwrite');
+    const gallery = transaction.objectStore('gallery');
+    const order = gallery.get('order');
+    const trash = gallery.get('trash');
+    let result, failure;
+    transaction.oncomplete = () => resolve(result);
+    transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('No se pudo actualizar la papelera.'));
+    trash.onsuccess = () => {
+      try {
+        result = change(order.result ?? [], trash.result ?? []);
+        gallery.put(result.order, 'order');
+        gallery.put(result.trash, 'trash');
+        const images = transaction.objectStore('images');
+        for (const id of result.purge ?? []) images.delete(id);
+      } catch (error) {
+        failure = error;
+        transaction.abort();
+      }
+    };
+  });
+}

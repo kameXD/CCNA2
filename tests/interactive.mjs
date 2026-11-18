@@ -11,7 +11,7 @@ import { inflateSync } from 'node:zlib';
 const profile = await mkdtemp(join(tmpdir(), 'smartcapture-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const files = new Set(['index.html', 'style.css', 'app.js', 'detection.js',
-  'storage.js', 'exports.js', 'capture-analysis.js', 'sampling.js', 'sample-clock.js', 'tests/interactive.html']);
+  'storage.js', 'trash.js', 'exports.js', 'capture-analysis.js', 'sampling.js', 'sample-clock.js', 'tests/interactive.html']);
 const server = createServer(async (req, res) => {
   const path = req.url === '/' ? 'index.html' : req.url.slice(1);
   if (!files.has(path)) {
@@ -437,19 +437,122 @@ try {
   assert.deepEqual(await galleryIds(), ordered, 'orden y capturas tras recargar');
   console.log('Adjuntos, Ctrl + V, soltar archivos, numeración y orden en IndexedDB, PDF y ZIP verificados.');
 
-  for (const accept of [false, true]) {
+  const trashCount = n => until(() => app.evalPage(`document.querySelector('#trash-count').textContent === '${n}'`), 'papelera ' + n);
+  const confirmAction = async (selector, accept) => {
     const opened = app.nextEvent('Page.javascriptDialogOpening');
-    const clicked = click(app, '#clear');
+    const clicked = click(app, selector);
     const dialog = await Promise.race([opened, wait(8000, {}, {ref: false})]);
     assert.equal(dialog.type, 'confirm');
     await app.send('Page.handleJavaScriptDialog', {accept});
     await clicked;
-    await expectCount(accept ? 0 : 12);
-  }
+  };
+  const viewerInfo = (position, width) => until(() => app.evalPage(`document.querySelector('#viewer').open &&
+    document.querySelector('#viewer-count').value === '${position}' &&
+    document.querySelector('#large').complete && document.querySelector('#large').naturalWidth === ${width} &&
+    !!document.querySelector('#viewer-delete:not([hidden]):enabled, #viewer-restore:not([hidden]):enabled')`), 'imagen del visor ' + position);
+  await click(app, '.card:nth-child(3) .thumb');
+  await viewerInfo('3 de 12', 73);
+  await click(app, '#viewer-delete');
+  await viewerInfo('3 de 11', 72);
+  await trashCount(1);
+  assert.ok(await app.evalPage('document.querySelector("#viewer #undo-toast:not([hidden])") !== null'));
+  await click(app, '#undo-delete');
+  await viewerInfo('4 de 12', 72);
+  assert.deepEqual(await galleryIds(), ordered);
+  await sendKey('Escape',27);
+  await click(app, '.card:last-child .thumb');
+  await viewerInfo('12 de 12',71);
+  await click(app, '#viewer-delete');
+  await viewerInfo('11 de 11',quality.width);
+  await sendKey('Escape',27);
+  await click(app, '.card:nth-child(3) .card-footer button:last-child');
+  await expectCount(10);
+  await trashCount(2);
+
+  await app.evalPage(`(() => {
+    globalThis.captureExports={};
+    HTMLAnchorElement.prototype.click=function(){
+      captureExports[this.download.split('.').at(-1)]=fetch(this.href).then(r=>r.blob()).then(blob=>
+        new Promise(resolve=>{
+          const reader=new FileReader();
+          reader.onload=()=>resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(blob);
+        }));
+    };
+  })()`);
+  const activeZip = await download('zip');
+  assert.equal(activeZip.readUInt16LE(activeZip.length-12), 10, 'ZIP excluye imágenes en la papelera');
+  const activePdf = await download('pdf');
+  assert.equal([...activePdf.toString('latin1').matchAll(/\/Subtype \/Image \/Width (\d+)/g)].length,10,
+    'PDF excluye imágenes en la papelera');
+
+  await app.send('Page.reload');
+  await expectCount(10);
+  await trashCount(2);
+  await click(app, '#trash-open');
+  await until(() => app.evalPage('document.querySelector("#trash-list .thumb img").naturalWidth > 0'), 'miniatura eliminada');
+  await click(app, '#trash-list .card:first-child .thumb');
+  await viewerInfo('1 de 2',73);
+  const reviewed = await app.evalPage(`(async()=>{
+    const bytes=await (await fetch(document.querySelector('#large').src)).arrayBuffer();
+    return btoa(String.fromCharCode(...new Uint8Array(bytes)));
+  })()`);
+  assert.equal(reviewed, fixtures[2], 'la papelera conserva el archivo original importado');
+  await click(app, '#viewer-restore');
+  await viewerInfo('1 de 1',71);
+  await sendKey('Escape',27);
+  await click(app, '#restore-all');
+  await expectCount(12);
+  await trashCount(0);
+  assert.deepEqual(await galleryIds(), ordered);
+  await sendKey('Escape',27);
+
+  await click(app, '#clear');
+  await expectCount(0);
+  await trashCount(12);
+  await click(app, '#undo-delete');
+  await expectCount(12);
+  assert.deepEqual(await galleryIds(), ordered);
+  await click(app, '#clear');
+  await trashCount(12);
+  await click(app, '#trash-open');
+  await click(app, '#trash-list .card:first-child .card-footer button:first-child');
+  await expectCount(1);
+  await sendKey('Escape',27);
+  await click(app, '#gallery .card .thumb');
+  await viewerInfo('1 de 1',71);
+  await click(app, '#viewer-delete');
+  await until(() => app.evalPage('!document.querySelector("#viewer").open && !document.querySelector("#undo-toast").hidden'),
+    'cerrar el visor al eliminar la única imagen');
+  await trashCount(12);
+  await click(app, '#undo-delete');
+  await expectCount(1);
+  assert.equal((await galleryIds())[0], ordered[0]);
+  await click(app, '#gallery .card .card-footer button:last-child');
+  await trashCount(12);
+  await click(app, '#trash-open');
+  const permanent = '#trash-list .card:first-child .card-footer button:last-child';
+  await confirmAction(permanent, false);
+  await trashCount(12);
+  await confirmAction(permanent, true);
+  await trashCount(11);
+  await confirmAction('#empty-trash',false);
+  await trashCount(11);
+  await confirmAction('#empty-trash',true);
+  await trashCount(0);
   await app.send('Page.reload');
   await until(() => app.evalPage('!document.querySelector("#empty")?.hidden'), 'galería vacía después de recargar');
   assert.equal(await count(),0);
-  console.log(`Chromium (${preview ? 'vista previa' : 'fotogramas directos'}): interacción, cursor, hover, scroll con solapamiento, recorte, ZIP/PDF, visor y borrado confirmado.`);
+  await trashCount(0);
+  assert.equal(await app.evalPage(`(async()=>{
+    const {openGallery}=await import('./storage.js');
+    const db=await openGallery();
+    return new Promise(resolve => {
+      const read=db.transaction('images').objectStore('images').count();
+      read.onsuccess=()=>{db.close();resolve(read.result);};
+    });
+  })()`),0,'vaciar la papelera elimina los originales de IndexedDB');
+  console.log(`Chromium (${preview ? 'vista previa' : 'fotogramas directos'}): papelera, visor, deshacer, restauración, persistencia, exclusión de exportaciones y confirmación definitiva verificados.`);
 } finally {
   for (const socket of sockets) socket.close();
   if (browser.exitCode === null && browser.signalCode === null) {

@@ -40,7 +40,7 @@
     </div>
     <p id="notice" role="status" aria-live="polite"></p>
     <section id="gallery-panel" class="panel gallery" aria-labelledby="gallery-title">
-      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button><button id="clear" class="quiet" disabled>Eliminar todas</button></div></div>
+      <div class="panel-head gallery-head"><div><h2 id="gallery-title">Galería <span id="count" class="count">0</span></h2><p class="hint">Arrastra las imágenes para cambiar el orden de exportación.</p></div><div class="export"><button id="pdf" disabled>Exportar PDF</button><button id="zip" disabled>Exportar ZIP</button><button id="clear" class="quiet" disabled>Eliminar todas</button><button id="trash-open" type="button" disabled>Papelera <span id="trash-count" class="count">0</span></button></div></div>
       <div class="import-controls">
         <button id="attach" type="button" disabled>Adjuntar imágenes</button>
         <input id="image-files" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden>
@@ -57,12 +57,26 @@
       <ol id="gallery"></ol>
     </section>
   </main>
+  <dialog id="trash-dialog" aria-labelledby="trash-title">
+    <div class="viewer-head">
+      <h2 id="trash-title">Papelera</h2>
+      <div class="controls">
+        <button id="restore-all" type="button">Restaurar todas</button>
+        <button id="empty-trash" type="button" class="danger">Vaciar papelera</button>
+        <form method="dialog"><button>Cerrar</button></form>
+      </div>
+    </div>
+    <p id="trash-empty" class="empty">La papelera está vacía.</p>
+    <ul id="trash-list"></ul>
+  </dialog>
   <dialog id="viewer" aria-labelledby="viewer-title">
     <div class="viewer-head">
       <h2 id="viewer-title">Captura</h2>
       <output id="viewer-count" aria-live="polite"></output>
       <div class="controls">
         <button id="zoom" type="button" aria-pressed="false">Tamaño original</button>
+        <button id="viewer-delete" type="button" class="danger">Eliminar</button>
+        <button id="viewer-restore" type="button" hidden>Restaurar</button>
         <form method="dialog"><button aria-label="Cerrar imagen">Cerrar</button></form>
       </div>
     </div>
@@ -72,5 +86,9 @@
       <button id="viewer-next" type="button" aria-label="Captura siguiente">›</button>
     </div>
   </dialog>
+  <div id="undo-toast" hidden>
+    <span id="undo-message" role="status"></span>
+    <button id="undo-delete" type="button">Deshacer</button>
+  </div>
 </body>
 </html>
