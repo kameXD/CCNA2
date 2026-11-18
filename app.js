@@ -7,6 +7,7 @@ import {
 } from './storage.js';
 import { moveToTrash, restoreOrder } from './trash.js';
 import { makePdf, makeZip } from './exports.js';
+import { attachMarquee } from './marquee.js';
 
 const elements = Object.fromEntries([...document.querySelectorAll('[id]')].map(el => [el.id, el]));
 const { video, stage, surface, selection, gallery, viewer, large } = elements;
@@ -25,6 +26,7 @@ let albumId;
 let changingAlbum = false;
 let pendingMove;
 let selectionMode = false;
+let selectionAnchor;
 const selectedIds = new Set();
 let mode = 'idle';
 let sharing = false;
@@ -453,12 +455,19 @@ function makeCard(entry) {
   node.draggable = true;
   const img = document.createElement('img');
   img.alt = '';
-  const preview = button('', () => {
+  const preview = button('', event => {
     if (!selectionMode) {
       enlarge(entry).catch(report);
     } else if (!galleryLocked()) {
-      if (!selectedIds.delete(entry.id)) selectedIds.add(entry.id);
-      renderSelection();
+      if (event.shiftKey) {
+        const range = selectionRange(entry.id);
+        replaceSelection(event.ctrlKey ? new Set([...selectedIds, ...range]) : range);
+        selectionAnchor ??= entry.id;
+      } else {
+        if (!selectedIds.delete(entry.id)) selectedIds.add(entry.id);
+        selectionAnchor = entry.id;
+        renderSelection();
+      }
     }
   });
   preview.className = 'thumb';
@@ -554,6 +563,7 @@ function render() {
 }
 
 function renderSelection() {
+  if (!cards.has(selectionAnchor)) selectionAnchor = undefined;
   for (const id of selectedIds) {
     if (!cards.has(id)) selectedIds.delete(id);
   }
@@ -583,10 +593,39 @@ function renderSelection() {
   elements['move-selected'].disabled = elements['delete-selected'].disabled || albums.length < 2;
 }
 
+function replaceSelection(ids) {
+  const previous = [...selectedIds];
+  const next = [...ids];
+  if (previous.length === next.length && next.every((id, index) => id === previous[index])) return;
+  selectedIds.clear();
+  for (const id of next) selectedIds.add(id);
+  renderSelection();
+}
+
+function selectionRange(id, fallback) {
+  const ordered = entries.map(entry => entry.id);
+  const end = ordered.indexOf(id);
+  const start = ordered.indexOf(selectionAnchor ?? fallback);
+  if (end < 0) return [];
+  if (start < 0) return [id];
+  return ordered.slice(Math.min(start, end), Math.max(start, end) + 1);
+}
+
+attachMarquee(gallery, elements['marquee-box'], {
+  enabled: () => selectionMode && !galleryLocked(),
+  getSelected: () => selectedIds,
+  replace: replaceSelection,
+  rangeTo: selectionRange,
+  setAnchor: id => { selectionAnchor = id; }
+});
+
 elements['selection-toggle'].onclick = () => {
   if (galleryLocked()) return;
   selectionMode = !selectionMode;
-  if (!selectionMode) selectedIds.clear();
+  if (!selectionMode) {
+    selectedIds.clear();
+    selectionAnchor = undefined;
+  }
   renderSelection();
 };
 elements['select-all'].onclick = () => {
@@ -597,6 +636,7 @@ elements['select-all'].onclick = () => {
 elements['deselect-all'].onclick = () => {
   if (galleryLocked()) return;
   selectedIds.clear();
+  selectionAnchor = undefined;
   renderSelection();
 };
 elements['move-selected'].onclick = () => openMoveAlbum([...selectedIds], true);
@@ -1020,6 +1060,7 @@ function applyAlbumState({ active, albums: known }) {
   if (active.id !== albumId) {
     hideUndo();
     selectedIds.clear();
+    selectionAnchor = undefined;
     selectionMode = false;
     resetDetection();
   }

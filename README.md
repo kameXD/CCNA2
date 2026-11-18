@@ -10,6 +10,8 @@ Cada álbum conserva su galería, su orden y su papelera. PDF y ZIP exportan sol
 
 Activa **Selección múltiple** y pulsa las miniaturas en el orden que quieras trasladarlas. **Seleccionar todas** añade las que falten en el orden de la galería. Puedes insertar el lote al principio, al final o en una posición de otro álbum. La posición 1 corresponde al principio. **Eliminar seleccionadas** envía el lote a la papelera y permite restaurar las posiciones originales. Ambas operaciones en lote requieren confirmación.
 
+En ese modo, mantén el botón izquierdo y arrastra sobre la galería para seleccionar con un recuadro. Las imágenes se numeran por filas, de izquierda a derecha. Mantén **Ctrl** para agregar o quitar imágenes de la selección anterior, o usa **Shift** para ampliar un rango desde la imagen de referencia. Al acercarte al borde de la ventana, la galería se desplaza. Pulsa **Escape** para cancelar el arrastre. Sal del modo de selección para reordenar tarjetas arrastrándolas.
+
 1. Abre SmartCapture en una versión actual de Chrome o Brave desde una URL HTTPS o desde `localhost`.
 2. Pulsa **Compartir fuente** y elige en el selector del navegador una pestaña, ventana o pantalla. Compartir solo la pestaña de NetAcad evita capturar otras aplicaciones y la vista previa de SmartCapture.
 3. Para recortar la imagen, pulsa **Seleccionar región** y arrastra sobre la vista previa. **Imagen completa** restablece el encuadre. Si cambias el tamaño de la fuente o el contenido se mueve dentro de la ventana, comprueba el recorte.
@@ -24,7 +26,7 @@ Activa **Selección múltiple** y pulsa las miniaturas en el orden que quieras t
 
 ## Publicación en GitHub Pages
 
-1. Sube `index.html`, `style.css`, `app.js`, `detection.js`, `capture-analysis.js`, `sampling.js`, `sample-clock.js`, `storage.js`, `trash.js` y `exports.js` a la raíz de `main`.
+1. Sube `index.html`, `style.css`, `app.js`, `detection.js`, `capture-analysis.js`, `sampling.js`, `sample-clock.js`, `storage.js`, `trash.js`, `marquee.js` y `exports.js` a la raíz de `main`.
 2. En GitHub, abre **Settings → Pages**. Elige **Deploy from a branch**, selecciona **main** y **/ (root)**, y guarda.
 3. Cuando termine el despliegue, abre la URL HTTPS indicada en **Pages**. Para este repositorio, la URL predeterminada es `https://kamexd.github.io/CCNA2/`. Prueba **Compartir fuente** desde esa página.
 
@@ -51,7 +53,7 @@ Para probar localmente con Node.js instalado, ejecuta `npx --yes http-server . -
 
 ## Verificación
 
-Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para comprobar la captura, la galería y la papelera. Añade `--albums` para verificar los álbumes y la migración de una base de datos anterior, o `--selection` para probar la selección múltiple. Usa `--preview` para tomar los fotogramas de la vista previa. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
+Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para comprobar la captura, la galería y la papelera. Añade `--albums` para verificar los álbumes y la migración de una base de datos anterior, `--selection` para probar las operaciones en lote o `--marquee` para probar la selección por arrastre. Usa `--preview` para tomar los fotogramas de la vista previa. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
 
 - En Chromium 156 para Linux, la prueba interactiva compartió una pestaña real con `getDisplayMedia` y mantuvo SmartCapture oculta. Verificó cambios de texto y diagrama, cursor, hover, duplicados de vistas anteriores, solapamiento al desplazar y resolución del PNG. Pasó con lectura directa de fotogramas y con la ruta de vista previa. También comprobó el recorte, la navegación del visor y el borrado confirmado con persistencia al recargar.
 - Un flujo de video sintético en Chromium permitió comprobar el recorte, la espera de estabilidad, cambios de pocos píxeles, duplicados, pausa, captura manual, reanudación, finalización, reordenación, ampliación, eliminación y persistencia después de recargar. También se comprobaron los umbrales RGB y el ajuste de la espera en Node.js.

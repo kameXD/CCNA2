@@ -9,11 +9,12 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { inflateSync } from 'node:zlib';
 import { seedLegacy, verifyAlbums } from './albums.mjs';
 import { verifySelection } from "./selection.mjs";
+import { verifyMarquee } from "./marquee.mjs";
 
 const profile = await mkdtemp(join(tmpdir(), 'smartcapture-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const files = new Set(['index.html', 'style.css', 'app.js', 'detection.js',
-  'storage.js', 'trash.js', 'exports.js', 'capture-analysis.js', 'sampling.js', 'sample-clock.js', 'tests/interactive.html']);
+  'storage.js', 'trash.js', 'exports.js', 'marquee.js', 'capture-analysis.js', 'sampling.js', 'sample-clock.js', 'tests/interactive.html']);
 const server = createServer(async (req, res) => {
   const path = req.url === '/' ? 'index.html' : req.url.slice(1);
   if (!files.has(path)) {
@@ -127,6 +128,7 @@ try {
   const expectCount = n => until(async () => await count() === n, `captura ${n}`);
   if (checkAlbums) await verifyAlbums({ app, click, expectCount, until });
   else if (process.argv.includes("--selection")) await verifySelection({ app, click, expectCount, until });
+  else if (process.argv.includes("--marquee")) await verifyMarquee({ app, click, expectCount, until });
   else await verifyExisting({ app, click, count, expectCount, source, targetId, preview });
 } finally {
   for (const socket of sockets) socket.close();
