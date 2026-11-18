@@ -8,6 +8,7 @@ import { extname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { inflateSync } from 'node:zlib';
 import { seedLegacy, verifyAlbums } from './albums.mjs';
+import { verifySelection } from "./selection.mjs";
 
 const profile = await mkdtemp(join(tmpdir(), 'smartcapture-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
@@ -122,9 +123,10 @@ try {
     })()`);
   }
   const click = (page, selector) => page.evalPage(`document.querySelector(${JSON.stringify(selector)}).click()`);
-  const count = () => app.evalPage('Number(document.querySelector("#count").textContent)');
+  const count = () => app.evalPage('Number(document.querySelector("#count")?.textContent)');
   const expectCount = n => until(async () => await count() === n, `captura ${n}`);
   if (checkAlbums) await verifyAlbums({ app, click, expectCount, until });
+  else if (process.argv.includes("--selection")) await verifySelection({ app, click, expectCount, until });
   else await verifyExisting({ app, click, count, expectCount, source, targetId, preview });
 } finally {
   for (const socket of sockets) socket.close();

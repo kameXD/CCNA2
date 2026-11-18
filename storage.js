@@ -127,14 +127,23 @@ export function deleteAlbum(db, id) {
   });
 }
 
-export function moveImage(db, source, destination, id) {
+export function moveImages(db, source, destination, ids, placement = 'end') {
   return write(db, ['albums'], async transaction => {
     const store = transaction.objectStore('albums');
     const [from, to] = await Promise.all([requireAlbum(store, source), requireAlbum(store, destination)]);
-    const index = from.order.findIndex(entry => entry.id === id);
-    if (index < 0 || source === destination) throw new Error('No se puede mover la imagen.');
-    const [entry] = from.order.splice(index, 1);
-    to.order.push(entry);
+    const available = new Map(from.order.map(entry => [entry.id, entry]));
+    const selected = new Set(ids);
+    const present = new Set([...to.order.map(entry => entry.id), ...to.trash.map(({ entry }) => entry.id)]);
+    if (source === destination || !ids.length || selected.size !== ids.length ||
+        ids.some(id => !available.has(id) || present.has(id))) {
+      throw new Error('El traslado no se realizó. Comprueba que las imágenes sigan en el álbum de origen.');
+    }
+    const index = placement === 'end' ? to.order.length : placement - 1;
+    if (!Number.isInteger(index) || index < 0 || index > to.order.length) {
+      throw new Error(`Indica una posición entre 1 y ${to.order.length + 1} para ese álbum.`);
+    }
+    from.order = from.order.filter(entry => !selected.has(entry.id));
+    to.order = [...to.order.slice(0, index), ...ids.map(id => available.get(id)), ...to.order.slice(index)];
     store.put(from);
     store.put(to);
     return from.order;

@@ -3,7 +3,7 @@ import { scrollCoverage, sideMargins } from './capture-analysis.js';
 import { startSampling } from './sampling.js';
 import {
   openGallery, read, readAlbum, readAlbumState, selectAlbum, createAlbum, renameAlbum,
-  deleteAlbum, moveImage, updateGallery, updateTrash
+  deleteAlbum, moveImages, updateGallery, updateTrash
 } from './storage.js';
 import { moveToTrash, restoreOrder } from './trash.js';
 import { makePdf, makeZip } from './exports.js';
@@ -23,7 +23,9 @@ let trash = [];
 let albums = [];
 let albumId;
 let changingAlbum = false;
-let movingImageId;
+let pendingMove;
+let selectionMode = false;
+const selectedIds = new Set();
 let mode = 'idle';
 let sharing = false;
 let picking = false;
@@ -451,10 +453,21 @@ function makeCard(entry) {
   node.draggable = true;
   const img = document.createElement('img');
   img.alt = '';
-  const preview = button('', () => enlarge(entry).catch(report));
+  const preview = button('', () => {
+    if (!selectionMode) {
+      enlarge(entry).catch(report);
+    } else if (!galleryLocked()) {
+      if (!selectedIds.delete(entry.id)) selectedIds.add(entry.id);
+      renderSelection();
+    }
+  });
   preview.className = 'thumb';
   preview.setAttribute('aria-label', 'Ampliar captura');
-  preview.append(img);
+  const rank = document.createElement('span');
+  rank.className = 'selection-rank';
+  rank.hidden = true;
+  rank.setAttribute('aria-hidden', 'true');
+  preview.append(img, rank);
   const footer = document.createElement('div');
   footer.className = 'card-footer';
   const caption = document.createElement('span');
@@ -465,12 +478,12 @@ function makeCard(entry) {
   later.setAttribute('aria-label', 'Mover captura hacia el final');
   const move = button('Mover a…', () => moveToPosition(entry.id));
   const remove = button('Eliminar', () => discard([entry.id]));
-  const transfer = button('Mover a álbum…', () => openMoveAlbum(entry.id));
+  const transfer = button('Mover a álbum…', () => openMoveAlbum([entry.id]));
   controls.append(earlier, later, move, transfer, remove);
   footer.append(caption, controls);
   node.append(preview, footer);
   node.ondragstart = event => {
-    if (galleryLocked()) { event.preventDefault(); return; }
+    if (galleryLocked() || selectionMode) { event.preventDefault(); return; }
     dragId = entry.id;
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', dragId);
@@ -498,7 +511,7 @@ function makeCard(entry) {
     dragId = undefined;
     edit(list => reorder(list, moved, list.findIndex(item => item.id === entry.id)));
   };
-  const card = { node, img, caption, earlier, later, move, remove, transfer };
+  const card = { node, img, caption, earlier, later, move, remove, transfer, preview, rank };
   thumbnailObserver.observe(node);
   return card;
 }
@@ -534,10 +547,65 @@ function render() {
   });
   elements.count.textContent = entries.length;
   elements.empty.hidden = entries.length > 0;
+  renderSelection();
   renderTrash();
   updateViewerPosition();
   refreshControls();
 }
+
+function renderSelection() {
+  for (const id of selectedIds) {
+    if (!cards.has(id)) selectedIds.delete(id);
+  }
+  const ranks = new Map([...selectedIds].map((id, index) => [id, index + 1]));
+  const locked = galleryLocked();
+  for (const [id, card] of cards) {
+    const rank = ranks.get(id);
+    card.node.classList.toggle('selected', !!rank);
+    card.node.draggable = !selectionMode;
+    card.rank.hidden = !rank;
+    card.rank.textContent = rank ?? '';
+    if (selectionMode) {
+      card.preview.setAttribute('aria-pressed', String(!!rank));
+      card.preview.setAttribute('aria-label', rank
+        ? `Deseleccionar imagen · selección ${rank}` : 'Seleccionar imagen');
+    } else {
+      card.preview.removeAttribute('aria-pressed');
+      card.preview.setAttribute('aria-label', 'Ampliar captura');
+    }
+  }
+  elements['selection-toggle'].setAttribute('aria-pressed', String(selectionMode));
+  elements['selection-toggle'].disabled = !db || locked;
+  elements['selection-actions'].hidden = !selectionMode;
+  elements['selection-count'].value = `${selectedIds.size} seleccionadas`;
+  elements['select-all'].disabled = locked || selectedIds.size === entries.length;
+  elements['deselect-all'].disabled = elements['delete-selected'].disabled = locked || !selectedIds.size;
+  elements['move-selected'].disabled = elements['delete-selected'].disabled || albums.length < 2;
+}
+
+elements['selection-toggle'].onclick = () => {
+  if (galleryLocked()) return;
+  selectionMode = !selectionMode;
+  if (!selectionMode) selectedIds.clear();
+  renderSelection();
+};
+elements['select-all'].onclick = () => {
+  if (galleryLocked()) return;
+  for (const entry of entries) selectedIds.add(entry.id);
+  renderSelection();
+};
+elements['deselect-all'].onclick = () => {
+  if (galleryLocked()) return;
+  selectedIds.clear();
+  renderSelection();
+};
+elements['move-selected'].onclick = () => openMoveAlbum([...selectedIds], true);
+elements['delete-selected'].onclick = () => {
+  const ids = [...selectedIds];
+  if (!galleryLocked() && ids.length && confirm(`¿Enviar ${ids.length} imágenes seleccionadas a la papelera?`)) {
+    discard(ids, true);
+  }
+};
 
 function reorder(list, id, target) {
   const from = list.findIndex(entry => entry.id === id);
@@ -728,7 +796,7 @@ function followViewer(id, index, fromTrash) {
   else viewer.close();
 }
 
-async function discard(ids) {
+async function discard(ids, requireAll = false) {
   if (!db || galleryLocked()) return;
   const id = viewerId;
   const index = entries.findIndex(entry => entry.id === id);
@@ -739,8 +807,13 @@ async function discard(ids) {
     if (mode === 'running') setMode('paused');
   }
   try {
-    const result = await changeTrash((order, deleted) =>
-      moveToTrash(order, deleted, ids ?? order.map(entry => entry.id)));
+    const result = await changeTrash((order, deleted) => {
+      const updated = moveToTrash(order, deleted, ids ?? order.map(entry => entry.id));
+      if (requireAll && updated.moved.length !== ids.length) {
+        throw new Error('El borrado no se realizó. Alguna imagen ya no está disponible.');
+      }
+      return updated;
+    });
     if (!result?.moved.length) return;
     followViewer(id, index, false);
     showUndo(result.moved);
@@ -946,6 +1019,8 @@ function albumOptions(select, choices) {
 function applyAlbumState({ active, albums: known }) {
   if (active.id !== albumId) {
     hideUndo();
+    selectedIds.clear();
+    selectionMode = false;
     resetDetection();
   }
   albums = known;
@@ -998,27 +1073,46 @@ elements['album-delete'].onclick = () => {
 };
 
 const moveDialog = elements['move-album-dialog'];
-function openMoveAlbum(id) {
-  if (galleryLocked() || albums.length < 2) return;
-  movingImageId = id;
+function openMoveAlbum(ids, batch = false) {
+  if (galleryLocked() || albums.length < 2 || !ids.length) return;
+  pendingMove = { ids, batch };
   albumOptions(elements['move-album-target'], albums.filter(album => album.id !== albumId));
+  elements['move-placement'].hidden = !batch;
+  elements['move-place'].value = 'end';
+  elements['move-position'].value = 1;
+  elements['move-album-title'].textContent = batch ? `Mover ${ids.length} imágenes a otro álbum` : 'Mover imagen a otro álbum';
+  elements['move-album-confirm'].textContent = batch ? 'Mover seleccionadas' : 'Mover imagen';
+  elements['move-error'].textContent = '';
+  updateMovePlacement();
   moveDialog.showModal();
 }
+function updateMovePlacement() {
+  const input = elements['move-position'];
+  input.hidden = input.disabled = elements['move-place'].value !== 'position';
+}
+elements['move-place'].onchange = updateMovePlacement;
 elements['move-album-cancel'].onclick = () => moveDialog.close();
+moveDialog.addEventListener('close', () => {
+  if (!moveDialog.open) pendingMove = undefined;
+});
 elements['move-album-form'].onsubmit = async event => {
   event.preventDefault();
-  if (galleryLocked()) return;
+  if (galleryLocked() || !pendingMove) return;
   const destination = elements['move-album-target'].value;
+  const { ids, batch } = pendingMove;
+  const where = elements['move-place'].value;
+  const placement = where === 'start' ? 1 : where === 'position' ? elements['move-position'].valueAsNumber : 'end';
+  const name = elements['move-album-target'].selectedOptions[0].textContent;
+  if (batch && !confirm(`¿Mover ${ids.length} imágenes seleccionadas a «${name}»?`)) return;
   changingAlbum = true;
   elements['move-album-confirm'].disabled = true;
   render();
   try {
-    entries = await moveImage(db, albumId, destination, movingImageId);
+    entries = await moveImages(db, albumId, destination, ids, placement);
     moveDialog.close();
-    notice('Imagen movida al álbum de destino.');
+    notice(batch ? `${ids.length} imágenes movidas al álbum de destino.` : 'Imagen movida al álbum de destino.');
   } catch (error) {
-    moveDialog.close();
-    report(error);
+    elements['move-error'].textContent = error.message;
   } finally {
     changingAlbum = false;
     elements['move-album-confirm'].disabled = false;

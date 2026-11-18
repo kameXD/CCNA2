@@ -62,6 +62,16 @@
         <p class="hint">También puedes pegar con Ctrl + V o soltar archivos en la galería.</p>
       </div>
       <div id="empty" class="empty">Las capturas aparecerán aquí.</div>
+      <div class="import-controls">
+        <button id="selection-toggle" type="button" aria-pressed="false" disabled>Selección múltiple</button>
+        <div id="selection-actions" class="controls" hidden>
+          <output id="selection-count" aria-live="polite">0 seleccionadas</output>
+          <button id="select-all" type="button">Seleccionar todas</button>
+          <button id="deselect-all" type="button">Deseleccionar todas</button>
+          <button id="move-selected" type="button">Mover seleccionadas…</button>
+          <button id="delete-selected" type="button" class="danger">Eliminar seleccionadas</button>
+        </div>
+      </div>
       <ol id="gallery"></ol>
     </section>
   </main>
@@ -70,8 +80,18 @@
     <form id="move-album-form" class="import-controls">
       <label for="move-album-target">Álbum de destino</label>
       <select id="move-album-target" required></select>
+      <div id="move-placement" class="controls" hidden>
+        <label for="move-place">Insertar</label>
+        <select id="move-place">
+          <option value="end">Al final</option>
+          <option value="start">Al principio</option>
+          <option value="position">En una posición</option>
+        </select>
+        <input id="move-position" type="number" min="1" step="1" required disabled hidden value="1" aria-label="Posición de destino">
+      </div>
       <button id="move-album-confirm" type="submit">Mover imagen</button>
       <button id="move-album-cancel" type="button">Cancelar</button>
+      <p id="move-error" class="hint" role="status"></p>
     </form>
   </dialog>
   <dialog id="trash-dialog" aria-labelledby="trash-title">

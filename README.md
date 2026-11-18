@@ -8,6 +8,8 @@ En **Álbum activo** puedes crear, elegir o renombrar un álbum. Las capturas y 
 
 Cada álbum conserva su galería, su orden y su papelera. PDF y ZIP exportan solo la galería del álbum activo. Al eliminar un álbum se pide confirmación para borrar definitivamente su galería y su papelera. Si eliminas el último, SmartCapture crea un álbum «General» vacío.
 
+Activa **Selección múltiple** y pulsa las miniaturas en el orden que quieras trasladarlas. **Seleccionar todas** añade las que falten en el orden de la galería. Puedes insertar el lote al principio, al final o en una posición de otro álbum. La posición 1 corresponde al principio. **Eliminar seleccionadas** envía el lote a la papelera y permite restaurar las posiciones originales. Ambas operaciones en lote requieren confirmación.
+
 1. Abre SmartCapture en una versión actual de Chrome o Brave desde una URL HTTPS o desde `localhost`.
 2. Pulsa **Compartir fuente** y elige en el selector del navegador una pestaña, ventana o pantalla. Compartir solo la pestaña de NetAcad evita capturar otras aplicaciones y la vista previa de SmartCapture.
 3. Para recortar la imagen, pulsa **Seleccionar región** y arrastra sobre la vista previa. **Imagen completa** restablece el encuadre. Si cambias el tamaño de la fuente o el contenido se mueve dentro de la ventana, comprueba el recorte.
@@ -49,7 +51,7 @@ Para probar localmente con Node.js instalado, ejecuta `npx --yes http-server . -
 
 ## Verificación
 
-Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para comprobar la captura, la galería y la papelera. Añade `--albums` para verificar los álbumes y la migración de una base de datos anterior, o `--preview` para usar la vista previa como fuente de fotogramas. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
+Ejecuta `node --test tests/detection.mjs tests/analysis.mjs tests/trash.mjs` para las pruebas de detección, recorte, desplazamiento y restauración. Con Node.js 22 o posterior y Chromium instalado, ejecuta `node tests/interactive.mjs` para comprobar la captura, la galería y la papelera. Añade `--albums` para verificar los álbumes y la migración de una base de datos anterior, o `--selection` para probar la selección múltiple. Usa `--preview` para tomar los fotogramas de la vista previa. Puedes indicar el ejecutable mediante la variable `CHROMIUM`.
 
 - En Chromium 156 para Linux, la prueba interactiva compartió una pestaña real con `getDisplayMedia` y mantuvo SmartCapture oculta. Verificó cambios de texto y diagrama, cursor, hover, duplicados de vistas anteriores, solapamiento al desplazar y resolución del PNG. Pasó con lectura directa de fotogramas y con la ruta de vista previa. También comprobó el recorte, la navegación del visor y el borrado confirmado con persistencia al recargar.
 - Un flujo de video sintético en Chromium permitió comprobar el recorte, la espera de estabilidad, cambios de pocos píxeles, duplicados, pausa, captura manual, reanudación, finalización, reordenación, ampliación, eliminación y persistencia después de recargar. También se comprobaron los umbrales RGB y el ajuste de la espera en Node.js.
